@@ -1,0 +1,10 @@
+{
+  "password_hash": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+  "username": "Admin",
+  "openai_key": "",
+  "heygen_key": "",
+  "elevenlabs_key": "",
+  "auto_mode": true,
+  "daily_approval": true,
+  "revenue_alerts": true
+}
