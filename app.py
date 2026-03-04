@@ -1,7 +1,7 @@
 """
-ARTIFICIAL & INTELLIGENT
-AI Business Command Dashboard
-LM Studio (Llama-3.2-1B-Instruct-Q5_K_M) + Ollama + OpenAI triple-fallback
+⚡ ARTIFICIAL & INTELLIGENT — v4.0
+AI Business Command Dashboard · ArmourVault.au
+LM Studio (Llama-3.2) → Ollama → DeepSeek → OpenAI
 """
 import streamlit as st
 import json, os, re, time, socket
@@ -22,24 +22,37 @@ except ImportError:
 
 try:
     import plotly.graph_objects as go
+    import plotly.express as px
     import pandas as pd
     CHART_LIB = True
 except ImportError:
     CHART_LIB = False
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DATA = Path("data"); DATA.mkdir(exist_ok=True)
-SF   = DATA/"settings.json"
-PF   = DATA/"products.json"
-RF   = DATA/"revenue.json"
-TF   = DATA/"tasks.json"
-AVF  = DATA/"avatars.json"
-LF   = DATA/"leads.json"
-CF   = DATA/"chat.json"
-TASKF= DATA/"tasksheet.json"
-WINSF= DATA/"wins.json"
-CLIF = DATA/"clients.json"
-
+DATA    = Path("data"); DATA.mkdir(exist_ok=True)
+AVDIR   = DATA/"avatars_folder"; AVDIR.mkdir(exist_ok=True)
+SF      = DATA/"settings.json"
+PF      = DATA/"products.json"
+RF      = DATA/"revenue.json"
+TF      = DATA/"tasks.json"
+AVF     = DATA/"avatars.json"
+LF      = DATA/"leads.json"
+CF      = DATA/"chat.json"
+TASKF   = DATA/"tasksheet.json"
+WINSF   = DATA/"wins.json"
+CLIF    = DATA/"clients.json"
+IDEAF   = DATA/"ideas.json"
+DREAMF  = DATA/"dreambuilds.json"
+SECF    = DATA/"security.json"
+# ── Path aliases (for appended tab code compatibility) ────────────────────────
+DATA_DIR      = DATA
+TASKS_FILE    = TF
+LEADS_FILE    = LF
+REVENUE_FILE  = RF
+PRODUCTS_FILE = PF
+SETTINGS_FILE = SF
+IDEAS_FILE    = IDEAF
+ENQUIRIES_FILE= DREAMF
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def jload(p, d):
     try: return json.loads(p.read_text()) if p.exists() else d
@@ -63,8 +76,9 @@ def get_weather(city, api_key):
             timeout=4)
         d = r.json()
         if r.status_code == 200:
-            return {"temp": round(d["main"]["temp"]), "desc": d["weather"][0]["description"].title(),
-                    "city": d["name"], "icon": d["weather"][0]["main"]}
+            return {"temp": round(d["main"]["temp"]),
+                    "desc": d["weather"][0]["description"].title(),
+                    "city": d["name"]}
     except: pass
     return None
 
@@ -73,7 +87,7 @@ def scrape_emails(text):
 
 def send_telegram(msg):
     s = jload(SF, {})
-    token = s.get("telegram_token", "")
+    token   = s.get("telegram_token", "")
     chat_id = s.get("telegram_chat_id", "")
     if not token or not chat_id: return False
     try:
@@ -82,11 +96,62 @@ def send_telegram(msg):
         return True
     except: return False
 
-# ── AI Engine — LM Studio → Ollama → OpenAI ──────────────────────────────────
-def ai_call(prompt, system="You are a helpful AI business assistant.", max_tokens=1200):
+def extract_key_points(text):
+    lines = text.split('\n')
+    pts = []
+    for line in lines:
+        line = line.strip()
+        if line.startswith(('##', '**', '-', '*', '1.', '2.', '3.', '4.', '5.')) and len(line) > 12:
+            clean = line.lstrip('#*-123456789. ').strip().rstrip('*')
+            if clean and len(clean) > 8: pts.append(clean)
+    return pts[:8]
+
+def heygen_generate(script, api_key):
+    if not api_key: return None, "No HeyGen API key"
+    try:
+        headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
+        payload = {
+            "video_inputs": [{
+                "character": {"type": "avatar", "avatar_id": "Daisy-inskirt-20220818", "avatar_style": "normal"},
+                "voice": {"type": "text", "input_text": script[:1500], "voice_id": "1bd001e7e50f421d891986aad5158bc8"},
+                "background": {"type": "color", "value": "#000000"}
+            }],
+            "dimension": {"width": 1280, "height": 720}
+        }
+        r = requests.post("https://api.heygen.com/v2/video/generate",
+                          json=payload, headers=headers, timeout=30)
+        if r.status_code == 200:
+            vid_id = r.json().get("data", {}).get("video_id", "")
+            return vid_id, "Video generation started — check HeyGen dashboard in 2-3 minutes"
+        return None, f"HeyGen error {r.status_code}: {r.text[:100]}"
+    except Exception as e:
+        return None, f"HeyGen error: {e}"
+
+def did_generate(script, api_key):
+    if not api_key: return None, "No D-ID API key"
+    try:
+        import base64
+        headers = {"Authorization": f"Basic {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "script": {"type": "text", "input": script[:1000],
+                       "provider": {"type": "microsoft", "voice_id": "en-AU-NatashaNeural"}},
+            "presenter_id": "amy-jcwCkr1grs"
+        }
+        r = requests.post("https://api.d-id.com/talks",
+                          json=payload, headers=headers, timeout=30)
+        if r.status_code == 201:
+            return r.json().get("id", ""), "D-ID video generation started"
+        return None, f"D-ID error {r.status_code}"
+    except Exception as e:
+        return None, f"D-ID error: {e}"
+
+# ── AI Engine ─────────────────────────────────────────────────────────────────
+def ai_call(prompt,
+            system="You are a helpful AI business assistant for ArmourVault.au, an Australian cybersecurity and AI tools business. Be direct, practical, and Australian in tone.",
+            max_tokens=1500):
     s = jload(SF, {})
 
-    # 1. LM Studio (your Llama-3.2-1B-Instruct-Q5_K_M via Hugging Face)
+    # 1. LM Studio
     lm_url   = s.get("lm_studio_url", "http://localhost:1234/v1")
     lm_model = s.get("lm_model", "Llama-3.2-1B-Instruct-Q5_K_M")
     if lm_url and OPENAI_LIB:
@@ -94,7 +159,7 @@ def ai_call(prompt, system="You are a helpful AI business assistant.", max_token
             client = openai.OpenAI(api_key="lm-studio", base_url=lm_url)
             resp = client.chat.completions.create(
                 model=lm_model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
                 max_tokens=max_tokens, temperature=0.7, timeout=30)
             return resp.choices[0].message.content.strip(), "LM Studio (Llama-3.2)"
         except: pass
@@ -107,31 +172,31 @@ def ai_call(prompt, system="You are a helpful AI business assistant.", max_token
             client = openai.OpenAI(api_key="ollama", base_url=ol_url)
             resp = client.chat.completions.create(
                 model=ol_model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
                 max_tokens=max_tokens, timeout=30)
-            return resp.choices[0].message.content.strip(), "Ollama (Llama)"
+            return resp.choices[0].message.content.strip(), "Ollama"
         except: pass
 
-    # 3. DeepSeek (primary online engine — OpenAI-compatible)
+    # 3. DeepSeek (primary online)
     ds_key = s.get("deepseek_key", "sk-6c9ee828c9b24ea391e349e7477b85b4")
     if ds_key and OPENAI_LIB:
         try:
             client = openai.OpenAI(api_key=ds_key, base_url="https://api.deepseek.com/v1")
             resp = client.chat.completions.create(
                 model="deepseek-chat",
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
                 max_tokens=max_tokens)
             return resp.choices[0].message.content.strip(), "DeepSeek R1"
         except: pass
 
-    # 4. OpenAI (fallback)
+    # 4. OpenAI fallback
     oai_key = s.get("openai_key", "")
     if oai_key and OPENAI_LIB:
         try:
             client = openai.OpenAI(api_key=oai_key)
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
                 max_tokens=max_tokens)
             return resp.choices[0].message.content.strip(), "OpenAI GPT-4o-mini"
         except Exception as e:
@@ -141,1505 +206,1972 @@ def ai_call(prompt, system="You are a helpful AI business assistant.", max_token
 
 # ── Default data ──────────────────────────────────────────────────────────────
 DEFAULT_SETTINGS = {
-    "openai_key": "", "lm_studio_url": "http://localhost:1234/v1",
-    "lm_model": "Llama-3.2-1B-Instruct-Q5_K_M",
+    "openai_key": "", "deepseek_key": "sk-6c9ee828c9b24ea391e349e7477b85b4",
+    "lm_studio_url": "http://localhost:1234/v1", "lm_model": "Llama-3.2-1B-Instruct-Q5_K_M",
     "ollama_url": "http://localhost:11434/v1", "ollama_model": "llama3.2:1b",
     "telegram_token": "", "telegram_chat_id": "",
-    "weather_city": "Sydney", "weather_key": ""
+    "weather_city": "Sydney", "weather_key": "",
+    "heygen_key": "", "did_key": ""
 }
 
 DEFAULT_PRODUCTS = [
-    {"name":"Email Assassin","price":97,"billing":"month","status":"Live","customers":12,"mrr":1164,
-     "checklist":{"Code written":True,"Test with real emails":False,"Connect OpenAI API":False,"Deploy to production":False,"Landing page":False,"Launch":False}},
-    {"name":"Lead Generator & Scraper","price":697,"billing":"month","status":"Live","customers":3,"mrr":2091,
-     "checklist":{"Code written":True,"Test scraping":False,"LinkedIn integration":False,"Email verification":False,"Export CSV":False,"Deploy":False}},
-    {"name":"Podcast Generator","price":297,"billing":"month","status":"Beta","customers":1,"mrr":297,
-     "checklist":{"Code written":True,"Test audio generation":False,"Connect ElevenLabs":False,"Full workflow test":False,"Deploy":False}},
-    {"name":"Website Redesigner (SiteGlow AI)","price":497,"billing":"once","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test with real websites":False,"Improve HTML/CSS gen":False,"Add download ZIP":False,"Deploy":False}},
-    {"name":"Launch Kit AI","price":297,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Concept mapped":True,"Build 8 modules":False,"Test business plan gen":False,"Test contract templates":False,"Deploy":False}},
-    {"name":"LinkedIn Post Generator","price":97,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test post quality":False,"Add templates library":False,"Deploy":False}},
-    {"name":"Proposal Machine","price":497,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test proposal gen":False,"Add PDF export":False,"Deploy":False}},
-    {"name":"Meeting Genius","price":197,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test with meeting notes":False,"Calendar integration":False,"Deploy":False}},
-    {"name":"Content Factory","price":397,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test 30-day calendar":False,"Multi-platform support":False,"Deploy":False}},
-    {"name":"Sales Script Generator","price":297,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test script quality":False,"Add objection handlers":False,"Deploy":False}},
-    {"name":"Pitch Deck Creator","price":497,"billing":"once","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test deck generation":False,"Add PowerPoint export":False,"Deploy":False}},
-    {"name":"Competitor Spy","price":497,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Code written":True,"Test website scraping":False,"Add competitive analysis":False,"Deploy":False}},
-    {"name":"TradieTech Suite","price":197,"billing":"month","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Quote Generator":False,"Invoice Creator":False,"Job Scheduler":False,"Client Follow-up":False,"Marketing posts":False,"Bundle & test":False,"Deploy":False}},
-    {"name":"Magic Mike Builder","price":2997,"billing":"once","status":"Ready","customers":0,"mrr":0,
-     "checklist":{"Avatar creation (HeyGen)":False,"Voice generation (ElevenLabs)":False,"Script writing (GPT-4)":False,"Video creation automation":False,"Platform publishing":False,"Comment response automation":False,"Revenue tracking":False}},
-    {"name":"AI Sales Rep","price":1497,"billing":"month","status":"Concept","customers":0,"mrr":0,
-     "checklist":{"24/7 lead qualification":False,"Demo booking automation":False,"Follow-up sequences":False,"Deploy":False}},
+    {"name":"Email Assassin Pro","price":297,"mrr":0,"status":"Active","customers":0,"checklist":85},
+    {"name":"AI Avatar Builder","price":497,"mrr":0,"status":"Active","customers":0,"checklist":70},
+    {"name":"TradieTech Suite","price":197,"mrr":0,"status":"Pre-Launch","customers":0,"checklist":60},
+    {"name":"Cyber Shield Basic","price":14950,"mrr":1000,"status":"Active","customers":0,"checklist":90},
+    {"name":"Cyber Shield Pro","price":24950,"mrr":1500,"status":"Active","customers":0,"checklist":90},
+    {"name":"Cyber Shield Enterprise","price":39950,"mrr":2000,"status":"Active","customers":0,"checklist":90},
+    {"name":"AI Content Machine","price":197,"mrr":0,"status":"Active","customers":0,"checklist":80},
+    {"name":"Lead Sniper","price":147,"mrr":0,"status":"Active","customers":0,"checklist":75},
+    {"name":"Social Command Pro","price":247,"mrr":0,"status":"Active","customers":0,"checklist":65},
+    {"name":"Podcast Empire Kit","price":397,"mrr":0,"status":"Pre-Launch","customers":0,"checklist":50},
+    {"name":"Dashboard Builder Kit","price":2500,"mrr":0,"status":"Pre-Launch","customers":0,"checklist":40},
+    {"name":"Autonomous Agent Crew","price":497,"mrr":0,"status":"Development","customers":0,"checklist":30},
+    {"name":"Magic Mike Avatar System","price":997,"mrr":0,"status":"Pre-Launch","customers":0,"checklist":55},
 ]
 
-for f, d in [(SF, DEFAULT_SETTINGS), (PF, DEFAULT_PRODUCTS), (RF, {"today": 0, "history": []}),
-             (TF, []), (AVF, []), (LF, []), (CF, []), (TASKF, []), (WINSF, []), (CLIF, [])]:
+AGENTS = [
+    {"name":"Content Machine","emoji":"✍️","color":"#ff0080",
+     "system":"You are an expert content creator for Australian small businesses. Write platform-specific, engaging content with an authentic Australian voice. Include hooks, CTAs, and hashtags where relevant. Be punchy and direct."},
+    {"name":"Email Agent","emoji":"📧","color":"#00ff41",
+     "system":"You are an expert email copywriter for Australian B2B outreach. Write compelling cold emails, follow-ups, and sequences. Always include subject lines. Keep it direct, professional, and Australian. Focus on pain points and ROI."},
+    {"name":"Sales Bot","emoji":"💬","color":"#ffd700",
+     "system":"You are an expert sales strategist for Australian small businesses. Handle objections, write proposals, qualify leads, and create closing scripts. Focus on value, ROI, and building trust."},
+    {"name":"Analytics Brain","emoji":"📊","color":"#00bfff",
+     "system":"You are a business analytics expert. Analyse data, identify trends, generate insights, and provide actionable recommendations for revenue growth and business optimisation. Be specific with numbers and timelines."},
+    {"name":"Deploy Master","emoji":"🚀","color":"#ff6600",
+     "system":"You are an expert in product launches, automation workflows, and deployment strategies. Create step-by-step launch plans, automation sequences, and go-to-market strategies. Be specific and actionable."},
+    {"name":"Code Builder","emoji":"💻","color":"#9d4edd",
+     "system":"You are an expert Python and web developer. Write clean, production-ready code. Fix bugs, optimise performance, and build new features. Always include comments and error handling."},
+    {"name":"Social Agent","emoji":"📱","color":"#ff1493",
+     "system":"You are a social media expert for Australian businesses. Create platform-specific content for Facebook, Instagram, LinkedIn, TikTok, YouTube, and X. Optimise for each platform's algorithm. Write in the brand's voice."},
+    {"name":"Security Agent","emoji":"🛡️","color":"#00ff88",
+     "system":"You are a cybersecurity expert specialising in Australian compliance (SOCI Act, Essential 8, Privacy Act 1988). Provide security assessments, compliance checklists, incident response plans, and risk reports. Be precise and thorough."},
+]
+
+EMAIL_TEMPLATES = {
+    "1. Cold Outreach — Mining/SOCI Act": {
+        "subject": "SOCI Act compliance in 5 minutes instead of 5 weeks",
+        "body": "G'day [Name],\n\nQuick question about [Company]'s cybersecurity compliance.\n\nAre you spending weeks preparing SOCI Act reports for the board?\n\nI've built an AI system that generates compliance documentation in minutes instead of months. Risk assessments, incident reports, gap analyses — all automated.\n\nFormer A&I Armour engineer. Worked with [mention any mutual connection or similar company].\n\nWorth a 15-minute call to show you how [Company X] cut their compliance overhead by 80%?\n\nAvailable Tuesday or Thursday this week.\n\nCheers,\n[Your Name]\n[Phone]"
+    },
+    "2. Cold Outreach — Tradies": {
+        "subject": "Getting you more jobs without the paperwork headache",
+        "body": "G'day [Name],\n\nI work with tradies across [City] who are sick of spending their evenings doing quotes, invoices, and chasing payments instead of being with their families.\n\nI've built an AI tool that handles all of it — quotes in 60 seconds, invoices sent automatically, follow-ups done for you.\n\n[Tradie Name] from [Suburb] went from 3 hours of admin per day to 20 minutes.\n\nWorth a quick chat? I can show you exactly how it works in 10 minutes.\n\nCheers,\n[Your Name]\n[Phone]"
+    },
+    "3. Cold Outreach — LinkedIn": {
+        "subject": "Saw your post about [topic] — thought this might help",
+        "body": "Hi [Name],\n\nI came across your post about [specific topic they posted about] and it resonated — we're solving a similar problem for businesses like yours.\n\nWe've built an AI system that [specific benefit relevant to their industry]. [Company similar to theirs] used it to [specific result].\n\nWould love to share how it works — happy to send a quick 3-minute video walkthrough if that's easier than a call?\n\nBest,\n[Your Name]"
+    },
+    "4. Follow-Up #1 (3 days after cold outreach)": {
+        "subject": "Re: [Original subject line]",
+        "body": "G'day [Name],\n\nJust following up on my message from [day].\n\nI know your inbox is probably packed — I'll keep this short.\n\nWe just helped [similar company] achieve [specific result] in [timeframe]. Thought it might be relevant given what you're working on.\n\nStill happy to do a quick 10-minute call this week if you're keen.\n\nCheers,\n[Your Name]"
+    },
+    "5. Follow-Up #2 (7 days — value add)": {
+        "subject": "Something useful for [their industry]",
+        "body": "Hi [Name],\n\nI won't keep pushing for a call — but I did want to share something that might be useful regardless.\n\n[Share a genuine insight, tip, or resource relevant to their industry]\n\nNo strings attached — just thought it was worth passing on.\n\nIf you ever want to chat about how we're using AI to solve [their problem], I'm here.\n\nCheers,\n[Your Name]"
+    },
+    "6. Follow-Up #3 (14 days — break-up)": {
+        "subject": "Closing the loop",
+        "body": "G'day [Name],\n\nI'll take the hint — clearly the timing isn't right, and that's completely fine.\n\nI'll stop reaching out, but if [their pain point] ever becomes a priority, feel free to reach back out.\n\nWishing you and the team a great [quarter/year].\n\nCheers,\n[Your Name]\n\nP.S. — If you know anyone who might benefit from what we do, I'd really appreciate the introduction."
+    },
+    "7. Objection Handler — Too Expensive": {
+        "subject": "Re: Pricing",
+        "body": "G'day [Name],\n\nFair point — it's not cheap. But let me reframe it.\n\nIf this saves your team [X hours] per week, at [their hourly rate], that's $[calculated saving] per month. The tool pays for itself in [timeframe].\n\nWe also offer a 14-day trial with no lock-in. You see the value before you commit.\n\nWant me to put together a quick ROI breakdown specific to your business?\n\nCheers,\n[Your Name]"
+    },
+    "8. Objection Handler — Not the Right Time": {
+        "subject": "Re: Timing",
+        "body": "G'day [Name],\n\nCompletely understand — timing is everything.\n\nCan I ask — what would need to change for this to become a priority? That way I can reach back out when it actually makes sense for you, rather than just following up randomly.\n\nAnd if it helps, we can lock in your current pricing now and you activate whenever you're ready. No pressure.\n\nCheers,\n[Your Name]"
+    },
+    "9. Onboarding — Welcome Email": {
+        "subject": "Welcome to [Product Name] — here's how to get started",
+        "body": "G'day [Name],\n\nWelcome aboard — stoked to have you.\n\nHere's how to get the most out of [Product Name] in your first week:\n\n✅ Step 1: [First action — takes 2 minutes]\n✅ Step 2: [Second action]\n✅ Step 3: [Third action]\n\nIf you get stuck at any point, just reply to this email and I'll sort it out personally.\n\nYour first win should happen within [timeframe]. Let me know how it goes.\n\nCheers,\n[Your Name]"
+    },
+    "10. Onboarding — Day 3 Check-In": {
+        "subject": "How's [Product Name] going for you?",
+        "body": "G'day [Name],\n\nJust checking in — you've had [Product Name] for a few days now.\n\nHave you had a chance to [key action]? That's usually where people see the first big result.\n\nIf you haven't got there yet, no worries — here's a 2-minute shortcut: [specific tip]\n\nAny questions, just hit reply.\n\nCheers,\n[Your Name]"
+    },
+    "11. Win-Back — Churned Customer": {
+        "subject": "We've made some big improvements since you left",
+        "body": "G'day [Name],\n\nIt's been a while since you used [Product Name], and I wanted to reach out personally.\n\nSince you left, we've added:\n• [New feature 1]\n• [New feature 2]\n• [Improvement based on common feedback]\n\nI'd love to offer you a free 30-day trial of the new version — no credit card, no commitment.\n\nIf it's not for you after 30 days, no hard feelings. But I think you'll be surprised.\n\nInterested?\n\nCheers,\n[Your Name]"
+    },
+    "12. Referral Request": {
+        "subject": "Quick favour — do you know anyone who'd benefit from this?",
+        "body": "G'day [Name],\n\nHope things are going well.\n\nI'm reaching out because you've been one of our best customers, and I wanted to ask — do you know anyone else who might benefit from [Product Name]?\n\nFor every referral that becomes a customer, I'll give you [incentive — e.g. one month free, $X credit, gift card].\n\nNo pressure at all — just thought I'd ask. If someone comes to mind, just forward this email or send me their details and I'll take it from there.\n\nThanks mate,\n[Your Name]"
+    },
+    "13. Upsell — Existing Customer": {
+        "subject": "You're getting great results — here's the next level",
+        "body": "G'day [Name],\n\nI've been watching your results with [Product Name] and you're doing really well — [specific result if known].\n\nI wanted to let you know about [Upsell Product] — it's what our top customers use to [next level benefit].\n\nBecause you're already a customer, I can offer it to you at [discounted price] — that's [X]% off the standard price.\n\nWant me to set it up for you? Takes about 10 minutes.\n\nCheers,\n[Your Name]"
+    },
+    "14. Testimonial Request": {
+        "subject": "Would you mind sharing your experience?",
+        "body": "G'day [Name],\n\nI hope [Product Name] has been delivering value for you.\n\nI'm building out our case studies and would love to feature your experience — if you're open to it.\n\nIt would only take 5 minutes. I can either:\na) Send you 3 quick questions to answer via email, or\nb) Jump on a 10-minute call and I'll write it up for you to approve\n\nIn return, I'll give you [incentive].\n\nLet me know which works better for you.\n\nCheers,\n[Your Name]"
+    },
+    "15. Partnership Pitch": {
+        "subject": "Partnership opportunity — [mutual benefit]",
+        "body": "G'day [Name],\n\nI've been following [their company] for a while and I think there's a genuine opportunity for us to work together.\n\nWe serve [your audience] and you serve [their audience] — there's significant overlap without direct competition.\n\nI'm thinking: [specific partnership idea — referral arrangement, co-marketing, bundled offer, etc.]\n\nWould you be open to a 20-minute call to explore whether this makes sense for both of us?\n\nCheers,\n[Your Name]"
+    },
+    "16. Support — Issue Resolution": {
+        "subject": "Re: Your support request — sorted",
+        "body": "G'day [Name],\n\nThanks for reaching out — sorry you hit that snag.\n\nHere's what happened and how I've fixed it:\n\n[Clear explanation of the issue]\n[What was done to fix it]\n[What you can do now]\n\nIf you're still having trouble after trying that, just reply and I'll jump in personally.\n\nAppreciate your patience.\n\nCheers,\n[Your Name]"
+    },
+    "17. Weekly Newsletter": {
+        "subject": "[Week of Date] — What's working in AI for small business this week",
+        "body": "G'day [First Name],\n\nHere's what's worth your attention this week:\n\n🔥 THIS WEEK'S BIG THING\n[One key insight, trend, or tool worth knowing about]\n\n💡 QUICK WIN\n[One actionable tip they can implement today]\n\n📊 BY THE NUMBERS\n[One interesting stat relevant to their business]\n\n🛠️ WHAT WE'VE BEEN BUILDING\n[Brief update on your products or services]\n\nThat's it for this week. Hit reply if you want to chat about any of it.\n\nCheers,\n[Your Name]\nArmourVault.au"
+    },
+    "18. Cold Outreach — Restaurant/Hospitality": {
+        "subject": "Filling tables on slow nights — without paying for ads",
+        "body": "G'day [Name],\n\nI work with restaurants and cafes across [City] who are tired of slow Tuesday nights and wasted prep.\n\nI've built an AI system that predicts your slow periods, automatically sends targeted offers to your customer list, and fills those gaps — without you lifting a finger.\n\n[Similar restaurant] in [Suburb] filled 40 extra covers last month using it.\n\nWorth a 10-minute chat? I can show you exactly how it works.\n\nCheers,\n[Your Name]"
+    },
+    "19. Cold Outreach — Real Estate": {
+        "subject": "More listings, less time on admin",
+        "body": "G'day [Name],\n\nI work with real estate agents who are spending too much time on listing descriptions, market reports, and follow-up emails — and not enough time closing deals.\n\nI've built an AI system that writes your listing copy, generates market reports, and handles your follow-up sequences automatically.\n\n[Agent name] at [Agency] went from 4 hours of writing per week to 30 minutes.\n\nWorth a quick chat?\n\nCheers,\n[Your Name]"
+    },
+    "20. Cold Outreach — Professional Services": {
+        "subject": "Automating the parts of your business that eat your time",
+        "body": "G'day [Name],\n\nI work with [accountants/lawyers/consultants] who are brilliant at their work but spending too much time on proposals, client reports, and follow-ups.\n\nI've built an AI system that handles all of it — proposals written in minutes, reports generated automatically, follow-ups sent on schedule.\n\n[Similar firm] cut their admin time by 60% in the first month.\n\nWorth a 15-minute call to see if it fits your practice?\n\nCheers,\n[Your Name]"
+    },
+}
+
+DRIP_SEQUENCES = {
+    "New Lead — 7-Day Sequence": [
+        {"day": 1, "subject": "Welcome — here's what happens next", "body": "G'day [Name],\n\nThanks for your interest in [Product/Service]. Here's exactly what happens from here:\n\n✅ Day 1 (today): You'll receive this welcome email with everything you need to know\n✅ Day 2: I'll send you a case study showing exactly how [similar business] used this\n✅ Day 3: A quick video walkthrough of the key features\n✅ Day 7: A special offer for action-takers\n\nIn the meantime, if you have any questions, just hit reply.\n\nCheers,\n[Your Name]"},
+        {"day": 2, "subject": "How [Similar Business] got [specific result]", "body": "G'day [Name],\n\nYesterday I promised a case study — here it is.\n\n[Business Name] came to us with [specific problem]. They were [pain point description].\n\nAfter using [Product/Service] for [timeframe], they achieved:\n• [Result 1]\n• [Result 2]\n• [Result 3]\n\nThe key thing they did differently: [insight]\n\nCould this work for your business? Reply and let me know your situation.\n\nCheers,\n[Your Name]"},
+        {"day": 3, "subject": "Quick walkthrough — see exactly how it works", "body": "G'day [Name],\n\nI know reading about something is different from seeing it in action.\n\nHere's a quick walkthrough of [Product/Service]: [link to demo video or description]\n\nThe three things people always notice first:\n1. [Feature/benefit 1]\n2. [Feature/benefit 2]\n3. [Feature/benefit 3]\n\nAny questions after watching? Just reply.\n\nCheers,\n[Your Name]"},
+        {"day": 7, "subject": "Last chance — special offer expires tonight", "body": "G'day [Name],\n\nI've been sharing [Product/Service] with you this week, and I wanted to make you a special offer before it expires tonight.\n\nFor action-takers who sign up today: [specific offer — discount, bonus, extended trial]\n\nThis is only available until midnight tonight.\n\n[CTA button/link]\n\nIf you have any last questions before deciding, reply now and I'll get back to you within the hour.\n\nCheers,\n[Your Name]"},
+    ],
+    "Free Trial — 7-Day Activation Sequence": [
+        {"day": 1, "subject": "Your trial is live — start here", "body": "G'day [Name],\n\nYour free trial of [Product Name] is now active.\n\nTo get your first result in the next 10 minutes:\n\n1. Go to [URL]\n2. Click [specific button]\n3. Enter [specific input]\n4. Watch what happens\n\nThat's it. Your first win is 10 minutes away.\n\nCheers,\n[Your Name]"},
+        {"day": 3, "subject": "Have you tried [key feature] yet?", "body": "G'day [Name],\n\nYou've had the trial for a few days — have you tried [key feature] yet?\n\nIt's the one that usually gets people saying 'oh wow' — here's how to find it: [instructions]\n\nIf you've already found it, reply and let me know what you think.\n\nCheers,\n[Your Name]"},
+        {"day": 5, "subject": "2 days left — here's what you might have missed", "body": "G'day [Name],\n\nYour trial ends in 2 days. Before it does, here are the features most people miss:\n\n• [Hidden feature 1] — [what it does]\n• [Hidden feature 2] — [what it does]\n• [Pro tip] — [how to get more value]\n\nIf you want to keep access after the trial, here's how: [link]\n\nCheers,\n[Your Name]"},
+        {"day": 7, "subject": "Your trial ends today — what did you think?", "body": "G'day [Name],\n\nYour free trial of [Product Name] ends today.\n\nI'd love to know — did you get a chance to try it? What did you think?\n\nIf you want to keep going, you can upgrade here: [link]\n\nIf it wasn't the right fit, no hard feelings — but I'd genuinely appreciate knowing why. It helps me build a better product.\n\nEither way, thanks for giving it a go.\n\nCheers,\n[Your Name]"},
+    ],
+}
+
+for f, d in [(SF, DEFAULT_SETTINGS), (PF, DEFAULT_PRODUCTS),
+             (RF, {"today":0,"history":[]}), (TF,[]), (AVF,[]),
+             (LF,[]), (CF,[]), (TASKF,[]), (WINSF,[]),
+             (CLIF,[]), (IDEAF,[]), (DREAMF,[]), (SECF,[])]:
     if not f.exists(): jsave(f, d)
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="ARTIFICIAL & INTELLIGENT", page_icon="⚡", layout="wide",
-                   initial_sidebar_state="expanded")
+st.set_page_config(page_title="ARTIFICIAL & INTELLIGENT",
+                   page_icon="⚡", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap');
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 *{font-family:'Inter',sans-serif!important;}
-
-/* ── Core background ── */
-.stApp{background:#000!important;color:#f0f0f0;}
-section[data-testid="stSidebar"]{background:rgba(5,5,5,0.95)!important;border-right:1px solid #1a1a1a;}
-
-/* ── Typography ── */
-h1{color:#ff0080!important;text-shadow:0 0 30px rgba(255,0,128,.4),0 0 60px rgba(255,0,128,.15);font-weight:900;letter-spacing:-1px;}
-h2{color:#fff!important;font-weight:700;}
-h3{color:#00ff41!important;font-weight:600;text-shadow:0 0 12px rgba(0,255,65,.25);}
-
-/* ── Buttons ── */
-.stButton>button{
-  background:linear-gradient(135deg,#ff0080 0%,#c0006a 50%,#00ff41 100%)!important;
-  color:#fff!important;font-weight:700!important;border:none!important;
-  border-radius:8px!important;transition:all .25s!important;
-  box-shadow:0 2px 12px rgba(255,0,128,.2)!important;}
-.stButton>button:hover{
-  box-shadow:0 0 25px rgba(255,0,128,.5),0 0 50px rgba(0,255,65,.2)!important;
-  transform:translateY(-1px) scale(1.02)!important;}
-
-/* ── Inputs ── */
-.stTextInput>div>div>input,.stTextArea>div>div>textarea{
-  background:rgba(10,10,10,0.85)!important;
-  border:1px solid rgba(255,0,128,.25)!important;
-  color:#f0f0f0!important;border-radius:8px!important;
-  backdrop-filter:blur(10px)!important;}
-.stTextInput>div>div>input:focus,.stTextArea>div>div>textarea:focus{
-  border-color:#ff0080!important;box-shadow:0 0 12px rgba(255,0,128,.3)!important;}
-.stSelectbox>div>div{
-  background:rgba(10,10,10,0.85)!important;
-  border:1px solid rgba(255,0,128,.2)!important;color:#f0f0f0!important;
-  border-radius:8px!important;}
-
-/* ── Glass cards ── */
-.card{
-  background:rgba(12,12,12,0.75);
-  border:1px solid rgba(255,255,255,0.06);
-  border-radius:14px;padding:16px 18px;margin-bottom:12px;
-  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-  box-shadow:0 4px 24px rgba(0,0,0,.4);}
-.card-g{border-left:3px solid #00ff41;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(0,255,65,.1);}
-.card-p{border-left:3px solid #ff0080;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(255,0,128,.1);}
-.card-b{border-left:3px solid #00bfff;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(0,191,255,.1);}
-.card-y{border-left:3px solid #ffd700;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(255,215,0,.1);}
-
-/* ── Metrics ── */
-[data-testid="stMetricValue"]{color:#00ff41!important;font-weight:800!important;text-shadow:0 0 10px rgba(0,255,65,.3);}
-[data-testid="stMetricLabel"]{color:#555!important;font-size:.78em!important;}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"]{
-  background:rgba(6,6,6,0.9);border-bottom:1px solid rgba(255,0,128,.15);
-  backdrop-filter:blur(10px);}
-.stTabs [data-baseweb="tab"]{color:#444!important;font-size:.82em!important;font-weight:600!important;}
-.stTabs [aria-selected="true"]{
-  color:#ff0080!important;
-  border-bottom:2px solid #ff0080!important;
-  text-shadow:0 0 10px rgba(255,0,128,.4)!important;}
-
-/* ── Chat bubbles ── */
-.chat-user{
-  background:rgba(0,255,65,.05);border-left:3px solid #00ff41;
-  padding:12px 16px;border-radius:10px;margin:6px 0;
-  backdrop-filter:blur(10px);}
-.chat-ai{
-  background:rgba(255,0,128,.05);border-left:3px solid #ff0080;
-  padding:12px 16px;border-radius:10px;margin:6px 0;
-  backdrop-filter:blur(10px);}
-.chat-sys{
-  background:rgba(0,191,255,.04);border-left:3px solid #00bfff;
-  padding:10px 16px;border-radius:8px;margin:4px 0;font-size:.82em;}
-
-/* ── Status pills ── */
-.pill-on{background:rgba(0,42,10,.8);color:#00ff41;padding:4px 12px;border-radius:20px;
-  font-size:.75em;font-weight:700;display:inline-block;border:1px solid rgba(0,255,65,.2);}
-.pill-off{background:rgba(42,0,0,.8);color:#ff4444;padding:4px 12px;border-radius:20px;
-  font-size:.75em;font-weight:700;display:inline-block;border:1px solid rgba(255,68,68,.2);}
-.pill-ai{background:rgba(10,10,42,.8);color:#00bfff;padding:4px 12px;border-radius:20px;
-  font-size:.75em;font-weight:700;display:inline-block;border:1px solid rgba(0,191,255,.2);}
-
-/* ── Clock & weather boxes ── */
-.clock-box{
-  background:rgba(5,5,5,0.8);border:1px solid rgba(255,0,128,.3);
-  border-radius:12px;padding:10px 20px;text-align:center;
-  backdrop-filter:blur(20px);box-shadow:0 0 20px rgba(255,0,128,.1);}
-.weather-box{
-  background:rgba(5,5,5,0.8);border:1px solid rgba(0,191,255,.2);
-  border-radius:12px;padding:10px 16px;text-align:center;
-  backdrop-filter:blur(20px);}
-
-/* ── Login screen ── */
-.login-wrap{
-  max-width:400px;margin:80px auto;padding:40px;
-  background:rgba(8,8,8,0.9);border:1px solid rgba(255,0,128,.3);
-  border-radius:20px;backdrop-filter:blur(30px);
-  box-shadow:0 0 60px rgba(255,0,128,.15),0 0 120px rgba(0,255,65,.05);}
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar{width:4px;}
+html,body,[class*="css"]{background:#000!important;color:#e0e0e0!important;}
+.stApp{background:#000!important;}
+#MainMenu,footer,header{visibility:hidden;}
+.block-container{padding:1rem 1.2rem 2rem!important;max-width:100%!important;}
+.card{background:rgba(12,12,12,0.9);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:16px 20px;margin:8px 0;backdrop-filter:blur(20px);transition:border-color .2s;}
+.card:hover{border-color:rgba(255,0,128,.15);}
+.card-g{border-left:3px solid #00ff41;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(0,255,65,.06);}
+.card-p{border-left:3px solid #ff0080;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(255,0,128,.06);}
+.card-b{border-left:3px solid #00bfff;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(0,191,255,.06);}
+.card-y{border-left:3px solid #ffd700;box-shadow:0 4px 24px rgba(0,0,0,.4),-2px 0 12px rgba(255,215,0,.06);}
+.card-o{border-left:3px solid #ff6600;}
+[data-testid="stMetricValue"]{color:#00ff41!important;font-weight:800!important;font-size:1.5em!important;}
+[data-testid="stMetricLabel"]{color:#333!important;font-size:.75em!important;letter-spacing:.5px;}
+.stButton>button{background:rgba(255,0,128,.08)!important;color:#ff0080!important;border:1px solid rgba(255,0,128,.2)!important;border-radius:8px!important;font-weight:600!important;font-size:.82em!important;transition:all .2s!important;}
+.stButton>button:hover{background:rgba(255,0,128,.16)!important;border-color:rgba(255,0,128,.4)!important;}
+.stButton>button[kind="primary"]{background:linear-gradient(135deg,rgba(255,0,128,.18),rgba(0,255,65,.08))!important;color:#fff!important;border-color:rgba(255,0,128,.35)!important;}
+.stTextInput>div>div>input,.stTextArea>div>div>textarea,.stSelectbox>div>div{background:rgba(8,8,8,0.95)!important;color:#e0e0e0!important;border:1px solid rgba(255,255,255,.07)!important;border-radius:8px!important;}
+.stTextInput>div>div>input:focus,.stTextArea>div>div>textarea:focus{border-color:rgba(255,0,128,.35)!important;}
+.stTabs [data-baseweb="tab-list"]{background:rgba(4,4,4,0.98);border-bottom:1px solid rgba(255,0,128,.1);overflow-x:auto;flex-wrap:nowrap;}
+.stTabs [data-baseweb="tab"]{color:#2a2a2a!important;font-size:.73em!important;font-weight:600!important;white-space:nowrap;padding:8px 10px!important;}
+.stTabs [aria-selected="true"]{color:#ff0080!important;border-bottom:2px solid #ff0080!important;}
+.chat-user{background:rgba(0,255,65,.03);border-left:3px solid #00ff41;padding:14px 18px;border-radius:10px;margin:6px 0;line-height:1.7;}
+.chat-ai{background:rgba(255,0,128,.03);border-left:3px solid #ff0080;padding:14px 18px;border-radius:10px;margin:6px 0;line-height:1.7;white-space:pre-wrap;}
+.chat-sys{background:rgba(0,191,255,.03);border-left:3px solid #00bfff;padding:8px 14px;border-radius:8px;margin:3px 0;font-size:.78em;color:#333;}
+.key-point{background:rgba(255,215,0,.04);border:1px solid rgba(255,215,0,.12);border-radius:6px;padding:5px 10px;margin:2px 0;font-size:.8em;color:#ffd700;}
+.pill-on{background:rgba(0,30,8,.9);color:#00ff41;padding:3px 10px;border-radius:20px;font-size:.7em;font-weight:700;display:inline-block;border:1px solid rgba(0,255,65,.18);}
+.pill-off{background:rgba(30,0,0,.9);color:#ff4444;padding:3px 10px;border-radius:20px;font-size:.7em;font-weight:700;display:inline-block;border:1px solid rgba(255,68,68,.18);}
+.pill-ai{background:rgba(0,8,30,.9);color:#00bfff;padding:3px 10px;border-radius:20px;font-size:.7em;font-weight:700;display:inline-block;border:1px solid rgba(0,191,255,.18);}
+.pill-pink{background:rgba(30,0,10,.9);color:#ff0080;padding:3px 10px;border-radius:20px;font-size:.7em;font-weight:700;display:inline-block;border:1px solid rgba(255,0,128,.18);}
+.av-card{background:rgba(10,10,10,0.95);border:1px solid rgba(255,0,128,.12);border-radius:12px;padding:14px;margin:6px 0;transition:all .2s;}
+.av-card:hover{border-color:rgba(255,0,128,.3);box-shadow:0 0 16px rgba(255,0,128,.08);}
+.idea-card{background:rgba(8,8,8,0.95);border:1px solid rgba(255,215,0,.1);border-radius:10px;padding:12px 16px;margin:5px 0;}
+.idea-hot{border-color:rgba(255,0,128,.35)!important;}
+.sec-green{color:#00ff41!important;font-weight:700;}
+.sec-red{color:#ff4444!important;font-weight:700;}
+.sec-yellow{color:#ffd700!important;font-weight:700;}
+::-webkit-scrollbar{width:3px;height:3px;}
 ::-webkit-scrollbar-track{background:#000;}
-::-webkit-scrollbar-thumb{background:rgba(255,0,128,.3);border-radius:2px;}
-
-/* ── Progress bars ── */
+::-webkit-scrollbar-thumb{background:rgba(255,0,128,.2);border-radius:2px;}
 .stProgress>div>div{background:linear-gradient(90deg,#ff0080,#00ff41)!important;}
-
-/* ── Dividers ── */
 hr{border-color:rgba(255,255,255,.04)!important;}
-</style>
-""", unsafe_allow_html=True)
+@media(max-width:768px){
+  .block-container{padding:.5rem .5rem 2rem!important;}
+  [data-testid="stMetricValue"]{font-size:1.1em!important;}
+  .stTabs [data-baseweb="tab"]{font-size:.65em!important;padding:6px 7px!important;}
+}
+</style>""", unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for k, v in [("online", False), ("online_ts", 0), ("weather", None), ("weather_ts", 0), ("authenticated", False)]:
+for k, v in [("online",False),("online_ts",0),("weather",None),("weather_ts",0),
+             ("authenticated",False),("saved_points",[])]:
     if k not in st.session_state: st.session_state[k] = v
 
-# ── LOGIN GATE ────────────────────────────────────────────────────────────────
+# ── LOGIN ─────────────────────────────────────────────────────────────────────
 DASH_PASSWORD = "258088"
-
 if not st.session_state.authenticated:
     st.markdown("""
-    <div style='max-width:420px;margin:80px auto;padding:44px 40px;
-      background:rgba(8,8,8,0.92);border:1px solid rgba(255,0,128,.35);
+    <div style='max-width:400px;margin:80px auto;padding:44px 38px;
+      background:rgba(6,6,6,0.97);border:1px solid rgba(255,0,128,.28);
       border-radius:20px;backdrop-filter:blur(30px);
-      box-shadow:0 0 60px rgba(255,0,128,.15),0 0 120px rgba(0,255,65,.05);'>
-      <h1 style='text-align:center;margin:0 0 4px 0;font-size:1.7em;letter-spacing:-1px;'>⚡ ARTIFICIAL</h1>
-      <h1 style='text-align:center;margin:0 0 20px 0;font-size:1.7em;letter-spacing:-1px;color:#00ff41!important;'>&amp; INTELLIGENT</h1>
-      <p style='text-align:center;color:#444;font-size:.82em;letter-spacing:2px;margin-bottom:28px;'>COMMAND DASHBOARD · ARMOURVAULT.AU</p>
-    </div>
-    """, unsafe_allow_html=True)
-    col_l, col_m, col_r = st.columns([1, 1.2, 1])
-    with col_m:
-        pw = st.text_input("Password", type="password", placeholder="Enter access code", label_visibility="collapsed")
+      box-shadow:0 0 60px rgba(255,0,128,.1),0 0 120px rgba(0,255,65,.04);'>
+      <h1 style='text-align:center;margin:0 0 2px;font-size:1.7em;letter-spacing:-1px;color:#fff;'>⚡ ARTIFICIAL</h1>
+      <h1 style='text-align:center;margin:0 0 8px;font-size:1.7em;letter-spacing:-1px;color:#00ff41;'>&amp; INTELLIGENT</h1>
+      <p style='text-align:center;color:#222;font-size:.72em;letter-spacing:3px;margin-bottom:28px;'>COMMAND DASHBOARD · ARMOURVAULT.AU</p>
+    </div>""", unsafe_allow_html=True)
+    cl, cm, cr = st.columns([1,1.3,1])
+    with cm:
+        pw = st.text_input("Code", type="password", placeholder="Access code",
+                           label_visibility="collapsed")
         if st.button("⚡ ACCESS DASHBOARD", use_container_width=True, type="primary"):
             if pw == DASH_PASSWORD:
-                st.session_state.authenticated = True
-                st.rerun()
+                st.session_state.authenticated = True; st.rerun()
             else:
-                st.error("Incorrect password.")
-        st.markdown("<p style='text-align:center;color:#222;font-size:.72em;margin-top:16px;'>ArmourVault.au &nbsp;·&nbsp; Authorised Access Only</p>", unsafe_allow_html=True)
+                st.error("Incorrect access code.")
+        st.markdown("<p style='text-align:center;color:#111;font-size:.68em;margin-top:10px;'>ArmourVault.au · v4.0 · Authorised Access Only</p>",
+                    unsafe_allow_html=True)
     st.stop()
 
-# ── Load all data ─────────────────────────────────────────────────────────────
-S        = jload(SF, DEFAULT_SETTINGS)
-products = jload(PF, DEFAULT_PRODUCTS)
-revenue  = jload(RF, {"today": 0, "history": []})
-tasks    = jload(TF, [])
-avatars  = jload(AVF, [])
-leads    = jload(LF, [])
-chat_hist= jload(CF, [])
-tasksheet= jload(TASKF, [])
-wins     = jload(WINSF, [])
-clients  = jload(CLIF, [])
+# ── Load data ─────────────────────────────────────────────────────────────────
+S           = jload(SF, DEFAULT_SETTINGS)
+products    = jload(PF, DEFAULT_PRODUCTS)
+revenue     = jload(RF, [])
+tasks       = jload(TF, [])
+avatars     = jload(AVF, [])
+leads       = jload(LF, [])
+chat        = jload(CF, [])
+tasksheet   = jload(TASKF, [])
+wins        = jload(WINSF, [])
+clients     = jload(CLIF, [])
+ideas       = jload(IDEAF, [])
+dreambuilds = jload(DREAMF, [])
+security_log= jload(SECF, [])
 
-# ── Online check (cached 60s) ─────────────────────────────────────────────────
+# ── Online / weather cache ────────────────────────────────────────────────────
 if time.time() - st.session_state.online_ts > 60:
     st.session_state.online = check_online()
     st.session_state.online_ts = time.time()
 online = st.session_state.online
 
-# ── Weather (cached 10min) ────────────────────────────────────────────────────
-if (time.time() - st.session_state.weather_ts > 600 and online
-        and S.get("weather_key") and S.get("weather_city")):
-    st.session_state.weather = get_weather(S["weather_city"], S["weather_key"])
+if time.time() - st.session_state.weather_ts > 600:
+    st.session_state.weather = get_weather(S.get("weather_city","Sydney"), S.get("weather_key",""))
     st.session_state.weather_ts = time.time()
 weather = st.session_state.weather
 
-# ── Computed totals ───────────────────────────────────────────────────────────
-now = datetime.now()
-total_mrr = sum(p.get("mrr", 0) for p in products)
-total_customers = sum(p.get("customers", 0) for p in products)
-pending_tasks = [t for t in tasksheet if not t.get("done")]
-done_today = [t for t in tasksheet if t.get("done") and t.get("date", "") == now.strftime("%Y-%m-%d")]
+# ── Computed metrics ──────────────────────────────────────────────────────────
+now             = datetime.now()
+total_mrr       = sum(p.get("mrr",0) for p in products)
+total_arr       = total_mrr * 12
+total_customers = sum(p.get("customers",0) for p in products)
+open_tasks      = sum(1 for t in tasks if t.get("status") != "Done")
+open_leads      = sum(1 for l in leads if l.get("status") == "New")
+today_rev       = sum(r.get("amount",0) for r in revenue if isinstance(r,dict) and r.get("date","") == now.strftime("%Y-%m-%d"))
 
 # ── HEADER ────────────────────────────────────────────────────────────────────
-weather_html = ""
-if weather:
-    icons = {"Clear":"☀️","Clouds":"☁️","Rain":"🌧️","Thunderstorm":"⛈️","Snow":"❄️","Mist":"🌫️","Drizzle":"🌦️","Haze":"🌫️"}
-    wi = icons.get(weather["icon"], "🌡️")
-    weather_html = f"""<div class='weather-box'>{wi} <strong style='color:#00bfff;font-size:1.1em;'>{weather['temp']}°C</strong><br>
-    <span style='color:#555;font-size:.75em;'>{weather['desc']} · {weather['city']}</span></div>"""
-
-pill = '<span class="pill-on">🟢 ONLINE</span>' if online else '<span class="pill-off">🔴 OFFLINE</span>'
-
-clock_html = f"""
-<div style='background:rgba(5,5,5,0.85);border:1px solid rgba(255,0,128,.35);
-  border-radius:12px;padding:10px 20px;text-align:center;
-  backdrop-filter:blur(20px);box-shadow:0 0 20px rgba(255,0,128,.1);'>
-  <div style='color:#00ff41;font-size:1.8em;font-weight:900;letter-spacing:3px;'>{now.strftime('%H:%M')}</div>
-  <div style='color:#555;font-size:.72em;'>{now.strftime('%A %d %B %Y')}</div>
-</div>"""
+weather_str = f"🌤 {weather['temp']}°C {weather['city']}" if weather else ""
+online_pill = "<span style='background:#00ff41;color:#000;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:700;'>● ONLINE</span>" if online else "<span style='background:#ff0080;color:#fff;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:700;'>● OFFLINE</span>"
+ai_pill     = "<span style='background:#1a1a2e;color:#00ff41;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:700;border:1px solid #00ff41;'>⚡ DeepSeek R1</span>" if online else "<span style='background:#1a1a2e;color:#ff0080;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:700;border:1px solid #ff0080;'>⚡ LM Studio</span>"
 
 st.markdown(f"""
-<div style='display:flex;justify-content:space-between;align-items:center;padding:0 0 8px 0;flex-wrap:wrap;gap:10px;'>
+<div style='display:flex;align-items:center;justify-content:space-between;
+  padding:8px 2px;border-bottom:1px solid rgba(255,0,128,.08);margin-bottom:12px;flex-wrap:wrap;gap:8px;'>
   <div>
-    <h1 style='margin:0;font-size:2em;letter-spacing:-2px;color:#ff0080;
-      text-shadow:0 0 30px rgba(255,0,128,.4);'>
-      ⚡ ARTIFICIAL <span style="color:#00ff41;text-shadow:0 0 20px rgba(0,255,65,.4);">&amp;</span> INTELLIGENT
-    </h1>
-    <p style='color:#444;margin:3px 0 0 0;font-size:.78em;letter-spacing:3px;text-transform:uppercase;'>
-      AI Business Command Dashboard &nbsp;·&nbsp; ArmourVault.au
-    </p>
+    <span style='font-size:1.25em;font-weight:900;letter-spacing:-1px;color:#fff;'>⚡ ARTIFICIAL</span>
+    <span style='font-size:1.25em;font-weight:900;letter-spacing:-1px;color:#00ff41;'> & INTELLIGENT</span>
+    <span style='color:#1a1a1a;font-size:.65em;margin-left:8px;letter-spacing:2px;'>ARMOURVAULT.AU</span>
   </div>
-  <div style='display:flex;gap:12px;align-items:center;flex-wrap:wrap;'>
-    {weather_html}
-    {clock_html}
-    <div style='text-align:center;'>{pill}<br>
-      <span style='color:#333;font-size:.68em;'>Llama-3.2-1B · LM Studio</span>
-    </div>
+  <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>
+    <span style='color:#ff0080;font-size:.8em;font-weight:700;'>{now.strftime("%H:%M")}</span>
+    <span style='color:#222;font-size:.75em;'>{now.strftime("%a %d %b %Y")}</span>
+{f"<span style='color:#444;font-size:.75em;'>{weather_str}</span>" if weather_str else ""}
+{online_pill} {ai_pill}
   </div>
-</div>
-<hr style='border:none;border-top:1px solid rgba(255,255,255,.04);margin:0 0 12px 0;'>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
 
-# ── KPI Row ───────────────────────────────────────────────────────────────────
-k1,k2,k3,k4,k5,k6,k7 = st.columns(7)
-k1.metric("💰 MRR", f"${total_mrr:,}")
-k2.metric("📈 ARR", f"${total_mrr*12:,}")
-k3.metric("👥 Customers", total_customers)
-k4.metric("📦 Live Products", sum(1 for p in products if p["status"]=="Live"))
-k5.metric("🎭 Avatars", len(avatars))
-k6.metric("🔍 Leads", len(leads))
-k7.metric("📋 Tasks", len(pending_tasks))
-st.markdown("<hr style='border-color:#0f0f0f;margin:8px 0 0 0;'>", unsafe_allow_html=True)
+# ── KPIs ──────────────────────────────────────────────────────────────────────
+k1,k2,k3,k4,k5,k6 = st.columns(6)
+k1.metric("MRR", f"${total_mrr:,}", f"+${today_rev}")
+k2.metric("ARR", f"${total_arr:,}")
+k3.metric("Customers", total_customers)
+k4.metric("Open Tasks", open_tasks)
+k5.metric("Hot Leads", open_leads)
+k6.metric("Avatars Built", len(avatars))
 
 # ── TABS ──────────────────────────────────────────────────────────────────────
 tabs = st.tabs([
-    "🏠 Command","💬 AI Chat","🤖 Agents","🎭 Avatar Builder",
-    "📧 Email Suite","🔍 Lead Scraper","📦 Products","💰 Revenue",
-    "🎙️ Podcast","🌐 Web Tools","🚀 Business Tools","📋 Task Sheet","⚙️ Settings"
+    "🏠 Home","💬 Chat","🤖 Agents","🎭 Avatars","📱 Social",
+    "🛡️ Security","📧 Email","🔍 Leads","💡 Ideas","🌟 Dream Build",
+    "📦 Products","💰 Revenue","🚀 Biz Tools","📋 Tasks","⚙️ Settings"
 ])
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 0 — COMMAND CENTRE
+# TAB 0 — HOME / COMMAND CENTRE
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[0]:
     st.markdown("## 🏠 Daily Command Centre")
-    col1, col2 = st.columns([1.5, 1])
-
+    col1, col2 = st.columns([1.6, 1])
     with col1:
-        st.markdown("### 📋 Morning Briefing")
+        # Morning briefing
+        items = []
+        if open_tasks > 0: items.append(f"**{open_tasks} tasks** in the queue")
+        if open_leads > 0: items.append(f"**{open_leads} hot leads** need follow-up")
+        if today_rev > 0:  items.append(f"**${today_rev:,}** logged today")
+        if len(avatars) > 0: items.append(f"**{len(avatars)} avatars** in your roster")
+        if not items: items.append("All clear — ready to build.")
         st.markdown(f"""<div class='card card-g'>
-<p style='margin:4px 0;'>📅 <strong>Today:</strong> {now.strftime('%A %d %B %Y')}</p>
-<p style='margin:4px 0;'>💰 <strong>MRR:</strong> <span style='color:#00ff41;'>${total_mrr:,}</span> &nbsp;|&nbsp; ARR: <span style='color:#00ff41;'>${total_mrr*12:,}</span></p>
-<p style='margin:4px 0;'>✅ <strong>Done today:</strong> {len(done_today)} &nbsp;|&nbsp; ⏳ Pending: {len(pending_tasks)}</p>
-<p style='margin:4px 0;'>🎭 <strong>Avatars:</strong> {len(avatars)} &nbsp;|&nbsp; 👥 Leads: {len(leads)} &nbsp;|&nbsp; 🏆 Wins: {len(wins)}</p>
-<p style='margin:4px 0;'>📦 <strong>Live:</strong> {sum(1 for p in products if p["status"]=="Live")} products &nbsp;|&nbsp; 👥 Customers: {total_customers}</p>
+<span style='color:#00ff41;font-size:.72em;font-weight:700;letter-spacing:1px;'>MORNING BRIEFING · {now.strftime("%A %d %B")}</span><br><br>
+{"<br>".join(f"• {i}" for i in items)}
 </div>""", unsafe_allow_html=True)
 
-        st.markdown("### ⚡ Quick Actions")
-        qa1,qa2,qa3,qa4 = st.columns(4)
-        with qa1:
-            if st.button("📧 Email Suite", use_container_width=True): st.info("→ Email Suite tab")
-        with qa2:
-            if st.button("🎭 Build Avatar", use_container_width=True): st.info("→ Avatar Builder tab")
-        with qa3:
-            if st.button("🔍 Scrape Leads", use_container_width=True): st.info("→ Lead Scraper tab")
-        with qa4:
-            if st.button("🔔 Notify Phone", use_container_width=True):
-                msg = f"""🎭 <b>Avatar Empire Briefing</b>
-📅 {now.strftime('%d %b %Y %H:%M')}
-💰 MRR: ${total_mrr:,} | ARR: ${total_mrr*12:,}
-📋 Pending tasks: {len(pending_tasks)}
-👥 Leads: {len(leads)} | Avatars: {len(avatars)}
-📦 Live products: {sum(1 for p in products if p["status"]=="Live")}"""
-                sent = send_telegram(msg)
-                st.success("Sent to Telegram!" if sent else "Add Telegram token in Settings.")
-
-        st.markdown("### ➕ Quick Task")
-        with st.form("quick_task"):
-            qt = st.text_input("Task:", placeholder="e.g. Follow up with 3 mining leads")
-            qp = st.selectbox("Priority:", ["🔴 High","🟡 Medium","🟢 Low"])
-            if st.form_submit_button("Add Task"):
-                tasksheet.append({"task":qt,"priority":qp,"done":False,
-                                   "date":now.strftime("%Y-%m-%d"),"added":now.strftime("%H:%M"),"category":"Quick"})
-                jsave(TASKF, tasksheet); st.success("Added!"); st.rerun()
-
-        if st.button("🤖 Generate AI Daily Plan", use_container_width=True):
-            result, engine = ai_call(
-                f"It's {now.strftime('%A %d %B')}. I run an AI tools business. MRR: ${total_mrr:,}. "
-                f"Leads: {len(leads)}. Pending tasks: {len(pending_tasks)}. "
-                f"Live products: {sum(1 for p in products if p['status']=='Live')}. "
-                "Give me a sharp, prioritised 8-item action plan for today. Numbered list. Be specific.",
-                system="You are a no-BS business coach. Give sharp, specific daily action plans.", max_tokens=500)
-            if result:
-                st.markdown(f"""<div class='card card-g'><pre style='white-space:pre-wrap;color:#e0e0e0;font-family:Inter,sans-serif;font-size:.88em;'>{result}</pre></div>""", unsafe_allow_html=True)
-                lines = [re.sub(r'^\d+[\.\)]\s*','',l.strip()) for l in result.split("\n") if l.strip() and l.strip()[0].isdigit()]
-                for line in lines[:8]:
-                    if line: tasksheet.append({"task":line,"priority":"🟡 Medium","done":False,"date":now.strftime("%Y-%m-%d"),"added":now.strftime("%H:%M"),"category":"AI Plan"})
-                jsave(TASKF, tasksheet)
-            else: st.warning("No AI engine — start LM Studio or add OpenAI key in Settings.")
+        st.markdown("### ⚡ Quick Execute")
+        qt = st.text_area("What needs doing?", height=80,
+                          placeholder="e.g. Write 3 cold emails for mining companies...",
+                          key="qt_home")
+        qa = st.selectbox("Agent:", [a["name"] for a in AGENTS], key="qa_home")
+        if st.button("⚡ Execute Now", use_container_width=True, type="primary", key="exec_home"):
+            if qt.strip():
+                agent_sys = next((a["system"] for a in AGENTS if a["name"]==qa), AGENTS[0]["system"])
+                with st.spinner(f"{qa} executing..."):
+                    result, engine = ai_call(qt, system=agent_sys, max_tokens=1000)
+                if result:
+                    st.success(f"✅ Done via {engine}")
+                    st.markdown(f"<div class='card card-g'><pre style='white-space:pre-wrap;color:#e0e0e0;font-size:.85em;'>{result}</pre></div>",
+                                unsafe_allow_html=True)
+                    tasks.append({"id":len(tasks)+1,"desc":qt,"agent":qa,"status":"Done",
+                                  "result":result,"engine":engine,
+                                  "date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
+                    jsave(TF, tasks)
+                else:
+                    st.warning("No AI engine — start LM Studio or check Settings.")
 
     with col2:
-        st.markdown("### 📊 Revenue Milestones")
-        for label, target in [("$5K MRR",5000),("$10K MRR",10000),("$25K MRR",25000),("$50K MRR",50000),("$100K MRR",100000)]:
-            pct = min(total_mrr/target, 1.0)
-            col = "#00ff41" if pct>=1.0 else "#ffd700" if pct>0.5 else "#ff0080"
-            st.markdown(f"<span style='color:{col};font-weight:700;font-size:.9em;'>{label}</span> {'✅' if pct>=1.0 else f'— {pct*100:.0f}%'}", unsafe_allow_html=True)
-            st.progress(pct)
+        st.markdown(f"""<div class='card card-p'>
+<div style='font-size:1.9em;font-weight:900;color:#ff0080;'>${total_mrr:,}</div>
+<div style='color:#222;font-size:.72em;letter-spacing:1px;'>MONTHLY RECURRING REVENUE</div>
+<hr>
+<div style='font-size:1.2em;font-weight:700;color:#00ff41;'>${total_arr:,}</div>
+<div style='color:#222;font-size:.68em;'>ANNUAL RUN RATE</div>
+</div>""", unsafe_allow_html=True)
 
-        st.markdown("### 🚀 Projections")
-        for m, r in [("Month 1","$3K–$5K"),("Month 3","$12K–$15K"),("Month 6","$25K–$30K"),("Month 12","$50K+")]:
-            st.markdown(f"<span style='color:#333;font-size:.85em;'>{m}:</span> <strong style='color:#00ff41;'>{r} MRR</strong>", unsafe_allow_html=True)
+        st.markdown("### 🎯 Revenue Milestones")
+        for target, label in [(1000,"$1K MRR"),(5000,"$5K"),(10000,"$10K"),(25000,"$25K"),(50000,"$50K")]:
+            pct = min(100, int(total_mrr/target*100))
+            col = "#00ff41" if pct >= 100 else "#ff0080"
+            st.markdown(f"""<div style='margin:3px 0;'>
+<div style='display:flex;justify-content:space-between;font-size:.72em;'>
+  <span style='color:#333;'>{label}</span><span style='color:{col};font-weight:700;'>{pct}%</span>
+</div>
+<div style='background:rgba(255,255,255,.03);border-radius:3px;height:3px;margin-top:2px;'>
+  <div style='background:{col};width:{pct}%;height:3px;border-radius:3px;'></div>
+</div></div>""", unsafe_allow_html=True)
 
         st.markdown("### 🏆 Weekly Wins")
-        win_text = st.text_input("Log a win:", placeholder="e.g. Closed first paying customer!")
-        if st.button("🏆 Log Win", use_container_width=True):
-            if win_text.strip():
-                wins.append({"win":win_text,"date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
-                jsave(WINSF, wins); st.success("Win logged! 🔥"); st.rerun()
-        for w in reversed(wins[-5:]):
-            st.markdown(f"<span style='color:#ffd700;'>🏆</span> {w['win']} <span style='color:#222;font-size:.75em;'>{w.get('date','')}</span>", unsafe_allow_html=True)
-
-        st.markdown("### 🎯 Unfair Advantages")
-        for adv in ["10 years business experience","Renovation/construction expertise","Warm tradie network","Sales skills — closed $50K+ deals","Understanding of real pain points","All-in mentality"]:
-            st.markdown(f"<span style='color:#00ff41;font-size:.85em;'>✓</span> <span style='font-size:.85em;'>{adv}</span>", unsafe_allow_html=True)
+        new_win = st.text_input("Log a win:", placeholder="Closed a deal...", key="win_home")
+        if st.button("+ Log Win", key="addwin"):
+            if new_win.strip():
+                wins.append({"win":new_win,"date":now.strftime("%Y-%m-%d")})
+                jsave(WINSF, wins); st.success("Win logged! 🏆")
+        for w in reversed(wins[-4:]):
+            st.markdown(f"<div class='card card-y' style='padding:7px 12px;'><span style='color:#ffd700;'>🏆</span> <span style='font-size:.82em;'>{w['win']}</span></div>",
+                        unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — AI CHAT
+# TAB 1 — AI CHAT (rolling script, key points, saved highlights)
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[1]:
     st.markdown("## 💬 AI Command Chat")
-    st.markdown("<p style='color:#555;font-size:.85em;'>Your AI crew in one chat window. Assign tasks, get reports, write content, build strategies. Powered by your local Llama-3.2 via LM Studio — works offline.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#333;font-size:.8em;'>Context-aware — knows your MRR, products, leads, tasks. Talk naturally. Commands work inline.</p>",
+                unsafe_allow_html=True)
 
-    _, engine_test = ai_call("ping", system="Reply with just: pong", max_tokens=5)
-    if "Offline" in engine_test or "Error" in engine_test:
-        st.markdown('<span class="pill-off">⚡ No AI Engine — Start LM Studio or add OpenAI key in Settings</span>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<span class="pill-ai">⚡ {engine_test}</span>', unsafe_allow_html=True)
+    ce1, ce2, ce3 = st.columns(3)
+    with ce1:
+        st.markdown(f"<span class='pill-ai'>⚡ {'DeepSeek R1' if online else 'LM Studio'}</span>", unsafe_allow_html=True)
+    with ce2:
+        st.markdown(f"<span class='pill-pink'>💬 {len(chat)} messages</span>", unsafe_allow_html=True)
+    with ce3:
+        if st.button("🗑️ Clear Chat", key="clearchat"):
+            jsave(CF, []); st.rerun()
 
-    st.markdown("---")
+    # Saved key points
+    if st.session_state.saved_points:
+        st.markdown("### 📌 Saved Key Points")
+        for i, pt in enumerate(st.session_state.saved_points):
+            cp, cd = st.columns([10, 1])
+            with cp: st.markdown(f"<div class='key-point'>📌 {pt}</div>", unsafe_allow_html=True)
+            with cd:
+                if st.button("✕", key=f"delpt_{i}"):
+                    st.session_state.saved_points.pop(i); st.rerun()
+        st.markdown("---")
 
-    # Chat history
-    if not chat_hist:
-        st.markdown("""<div class='chat-sys'>
-👋 <strong>Welcome to AI Command Chat.</strong> I know your business — products, revenue, leads, tasks, agents.<br>
-Try: <em>"Write a cold email for a mining company"</em> · <em>"What's my MRR?"</em> · <em>"Build a TikTok script for a plumbing avatar"</em> · <em>"Give me today's action plan"</em> · <em>"Write a proposal for a $2,000 client"</em>
+    # Rolling chat history
+    for i, msg in enumerate(chat[-25:]):
+        role    = msg.get("role","user")
+        content = msg.get("content","")
+        engine  = msg.get("engine","")
+        ts      = msg.get("time","")
+        if role == "user":
+            st.markdown(f"""<div class='chat-user'>
+<span style='color:#00ff41;font-size:.7em;font-weight:700;'>YOU · {ts}</span><br>
+<span style='font-size:.88em;'>{content}</span>
 </div>""", unsafe_allow_html=True)
-    else:
-        for msg in chat_hist[-25:]:
-            if msg["role"] == "user":
-                st.markdown(f"<div class='chat-user'><strong style='color:#00ff41;font-size:.8em;'>YOU · {msg.get('time','')}</strong><br>{msg['content']}</div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div class='chat-ai'><strong style='color:#ff0080;font-size:.8em;'>AGENT · {msg.get('engine','AI')} · {msg.get('time','')}</strong><br><pre style='white-space:pre-wrap;font-family:Inter,sans-serif;margin:6px 0 0 0;color:#ddd;font-size:.88em;'>{msg['content']}</pre></div>", unsafe_allow_html=True)
+        elif role == "assistant":
+            formatted = content.replace('\n\n','<br><br>').replace('\n','<br>')
+            st.markdown(f"""<div class='chat-ai'>
+<span style='color:#ff0080;font-size:.7em;font-weight:700;'>AI · {engine} · {ts}</span><br>
+<span style='font-size:.87em;line-height:1.75;'>{formatted}</span>
+</div>""", unsafe_allow_html=True)
+            kpts = extract_key_points(content)
+            if kpts:
+                with st.expander(f"📌 {len(kpts)} Key Points — click to save", expanded=False):
+                    for pt in kpts:
+                        kc, ks = st.columns([9,1])
+                        with kc: st.markdown(f"<div class='key-point'>{pt}</div>", unsafe_allow_html=True)
+                        with ks:
+                            if st.button("📌", key=f"save_{i}_{pt[:8]}"):
+                                if pt not in st.session_state.saved_points:
+                                    st.session_state.saved_points.append(pt); st.rerun()
+        elif role == "system":
+            st.markdown(f"<div class='chat-sys'>{content}</div>", unsafe_allow_html=True)
 
     st.markdown("---")
 
     # Quick commands
-    st.markdown("<span style='color:#333;font-size:.8em;'>QUICK COMMANDS:</span>", unsafe_allow_html=True)
-    qc1,qc2,qc3,qc4,qc5,qc6 = st.columns(6)
-    quick_cmd = ""
-    with qc1:
-        if st.button("📊 MRR Report", use_container_width=True):
-            quick_cmd = f"Revenue report: MRR ${total_mrr:,}, ARR ${total_mrr*12:,}. Products: {', '.join([p['name']+' $'+str(p.get('mrr',0)) for p in products if p.get('mrr',0)>0])}. What should I focus on to grow MRR fastest?"
-    with qc2:
-        if st.button("📧 Cold Email", use_container_width=True):
-            quick_cmd = "Write a high-converting cold email for a small business owner about AI tools. Punchy, Australian tone, under 150 words, strong CTA."
-    with qc3:
-        if st.button("📋 Today's Plan", use_container_width=True):
-            quick_cmd = f"It's {now.strftime('%A')}. AI tools business. MRR ${total_mrr:,}. {len(leads)} leads. {len(pending_tasks)} pending tasks. Give me a sharp prioritised action plan for today."
-    with qc4:
-        if st.button("🎭 Avatar Idea", use_container_width=True):
-            quick_cmd = "Give me 3 fresh avatar niche ideas for TikTok/YouTube targeting Australian audiences. Include monetisation potential for each."
-    with qc5:
-        if st.button("💡 Business Idea", use_container_width=True):
-            quick_cmd = "Give me one killer AI business idea I can build and sell in 30 days. Specific: niche, price, target customer, how to get first 10 sales."
-    with qc6:
-        if st.button("💰 Close Script", use_container_width=True):
-            quick_cmd = "Write a word-for-word sales closing script for selling a $297/month AI tool to a small business owner who said 'I need to think about it'."
+    st.markdown("<span style='color:#1a1a1a;font-size:.72em;'>QUICK COMMANDS</span>", unsafe_allow_html=True)
+    qcols = st.columns(4)
+    qcmds = ["Write a cold email for a mining company",
+             "What should I focus on today?",
+             "Generate 5 TikTok hooks for my AI product",
+             "Write a follow-up for a warm lead"]
+    for qi, qc in enumerate(qcmds):
+        with qcols[qi]:
+            if st.button(qc[:28]+"…", key=f"qc_{qi}", use_container_width=True):
+                st.session_state["chat_prefill"] = qc
 
-    # Input form
-    with st.form("chat_form", clear_on_submit=True):
-        ci, cb = st.columns([5, 1])
-        with ci:
-            user_input = st.text_input("", placeholder="Ask anything, assign a task, or give a command...", label_visibility="collapsed")
-        with cb:
-            send = st.form_submit_button("Send ➤", use_container_width=True)
+    prefill = st.session_state.pop("chat_prefill", "")
+    ca, cb = st.columns([4,1])
+    with ca:
+        user_msg = st.text_area("Message:", value=prefill, height=90,
+                                placeholder="Talk to your crew... 'write me a proposal', 'what's my MRR?', 'build an avatar for a tradie in Brisbane'",
+                                key="chat_input")
+    with cb:
+        chat_agent = st.selectbox("Agent:", ["Auto"]+[a["name"] for a in AGENTS], key="chat_agent")
+        notify_tg  = st.checkbox("📱 Notify", key="chat_notify")
 
-    if quick_cmd:
-        user_input = quick_cmd; send = True
-
-    if send and user_input.strip():
-        system_ctx = f"""You are the Avatar Empire AI Command Centre — a sharp, direct, no-BS business AI.
-Business context: MRR ${total_mrr:,} | ARR ${total_mrr*12:,} | {len(products)} products ({sum(1 for p in products if p['status']=='Live')} live) | {len(leads)} leads | {len(avatars)} avatars | {len(pending_tasks)} pending tasks | Date: {now.strftime('%A %d %B %Y')}
-You are Australian, direct, practical, focused on making money. When asked to write content, write it fully. When asked for a plan, give specific actions. Keep responses sharp and actionable."""
-        chat_hist.append({"role":"user","content":user_input,"time":now.strftime("%H:%M")})
-        with st.spinner("Agent thinking..."):
-            result, engine = ai_call(user_input, system=system_ctx, max_tokens=900)
-        chat_hist.append({"role":"assistant","content":result or "No AI engine. Start LM Studio or add OpenAI key in Settings.","engine":engine,"time":now.strftime("%H:%M")})
-        jsave(CF, chat_hist[-80:])
-        st.rerun()
-
-    col_clr1, col_clr2 = st.columns([5, 1])
-    with col_clr2:
-        if st.button("🗑️ Clear"):
-            jsave(CF, []); st.rerun()
+    cs1, cs2 = st.columns(2)
+    with cs1:
+        if st.button("⚡ SEND", use_container_width=True, type="primary", key="chat_send"):
+            if user_msg.strip():
+                ctx = f"""You are the AI crew for ArmourVault.au — Australian cybersecurity and AI tools.
+Business: MRR ${total_mrr:,} | ARR ${total_arr:,} | {total_customers} customers | {open_leads} hot leads | {open_tasks} open tasks | {len(avatars)} avatars.
+Products: {', '.join(p['name'] for p in products[:6])}.
+Respond clearly and practically. Use markdown. Be direct and Australian in tone."""
+                sys_prompt = (next((a["system"] for a in AGENTS if a["name"]==chat_agent), ctx) + "\n\n" + ctx) if chat_agent != "Auto" else ctx
+                chat.append({"role":"user","content":user_msg,"time":now.strftime("%H:%M")})
+                jsave(CF, chat)
+                with st.spinner("Thinking..."):
+                    result, engine = ai_call(user_msg, system=sys_prompt, max_tokens=1500)
+                if result:
+                    chat.append({"role":"assistant","content":result,"engine":engine,"time":now.strftime("%H:%M")})
+                    if notify_tg: send_telegram(f"💬 Chat\n{result[:300]}")
+                else:
+                    chat.append({"role":"system","content":"No AI engine — start LM Studio or check Settings."})
+                jsave(CF, chat); st.rerun()
+    with cs2:
+        if st.button("📋 Export Chat", use_container_width=True, key="chat_export"):
+            txt = "\n\n".join([f"[{m.get('role','').upper()} {m.get('time','')}]\n{m.get('content','')}" for m in chat])
+            st.download_button("⬇ Download", txt, "chat_log.txt", key="dl_chat")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — AGENT SQUAD
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[2]:
-    st.markdown("## 🤖 AI Agent Crew")
-    AGENTS = [
-        {"name":"Content Machine","role":"Scripts, posts, captions, blogs, ad copy","icon":"✍️","color":"card-g",
-         "system":"You are Content Machine, expert content creator. Write compelling, platform-specific content that drives engagement and sales. Be specific, punchy, Australian tone."},
-        {"name":"Email Agent","role":"Cold emails, follow-ups, sequences, replies","icon":"📧","color":"card-p",
-         "system":"You are Email Agent, expert email copywriter. Write emails that get opened, read, and actioned. Australian tone, direct, no fluff. Always include subject line."},
-        {"name":"Sales Bot","role":"Lead qualification, objection handling, proposals","icon":"💬","color":"card-b",
-         "system":"You are Sales Bot, expert sales closer. Handle objections, qualify leads, write proposals, close deals. Be direct and confident."},
-        {"name":"Analytics Brain","role":"Data insights, revenue reports, projections","icon":"📊","color":"card-y",
-         "system":"You are Analytics Brain, data analyst. Provide sharp, actionable insights from business data. Be specific with numbers and recommendations."},
-        {"name":"Deploy Master","role":"Launch products, automations, workflows","icon":"🚀","color":"card-g",
-         "system":"You are Deploy Master, expert in launching digital products. Provide step-by-step deployment plans. Be practical and specific."},
-        {"name":"Code Builder","role":"Write, fix, and optimise production code","icon":"💻","color":"card-p",
-         "system":"You are Code Builder, expert Python/web developer. Write clean, production-ready code with clear explanations."},
-    ]
-
-    col_a, col_b = st.columns(2)
-    for i, agent in enumerate(AGENTS):
-        col = col_a if i % 2 == 0 else col_b
-        with col:
-            st.markdown(f"""<div class='card {agent["color"]}'><h3 style='margin:0 0 2px 0;font-size:1em;'>{agent["icon"]} {agent["name"]}</h3>
-<p style='color:#555;margin:0 0 4px 0;font-size:.82em;'>{agent["role"]}</p>
-<span style='color:#00ff41;font-size:.75em;font-weight:700;'>🟢 ONLINE</span></div>""", unsafe_allow_html=True)
+    st.markdown("## 🤖 Agent Squad")
+    acols = st.columns(4)
+    for ai2, agent in enumerate(AGENTS):
+        with acols[ai2 % 4]:
+            st.markdown(f"""<div class='card' style='border-left:3px solid {agent["color"]};text-align:center;padding:10px;'>
+<div style='font-size:1.4em;'>{agent["emoji"]}</div>
+<div style='font-weight:700;font-size:.78em;color:{agent["color"]};'>{agent["name"]}</div>
+</div>""", unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### ⚡ Assign Task to Agent")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        task_desc = st.text_area("Task:", height=80, placeholder="e.g. Write 5 TikTok scripts for a plumbing avatar targeting homeowners aged 30-55 in Sydney...")
-    with col2:
-        agent_sel = st.selectbox("Agent:", ["Auto-Select"] + [a["name"] for a in AGENTS])
-        priority  = st.selectbox("Priority:", ["🔴 High","🟡 Medium","🟢 Low"])
+    st.markdown("### ⚡ Execute Task")
+    ta, tb, tc = st.columns([3,1,1])
+    with ta:
+        task_desc = st.text_area("Task:", height=80, placeholder="What do you need done?", key="agent_task")
+    with tb:
+        agent_sel = st.selectbox("Agent:", ["Auto-Select"]+[a["name"] for a in AGENTS], key="agent_sel")
+        priority  = st.selectbox("Priority:", ["High","Medium","Low"], key="agent_pri")
+    with tc:
+        st.markdown("<br>", unsafe_allow_html=True)
+        exec_btn  = st.button("▶ Execute", use_container_width=True, type="primary", key="agent_exec")
+        queue_btn = st.button("📋 Queue",  use_container_width=True, key="agent_queue")
+        clear_btn = st.button("🗑️ Clear",  use_container_width=True, key="agent_clear")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("🚀 Execute Now", use_container_width=True, type="primary"):
-            if task_desc.strip():
-                assigned = agent_sel if agent_sel != "Auto-Select" else "Content Machine"
-                agent_sys = next((a["system"] for a in AGENTS if a["name"] == assigned), AGENTS[0]["system"])
-                new_task = {"id":len(tasks)+1,"desc":task_desc,"agent":assigned,"priority":priority,
-                            "status":"Running","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")}
-                tasks.append(new_task); jsave(TF, tasks)
-                with st.spinner(f"{assigned} executing..."):
-                    result, engine = ai_call(task_desc, system=agent_sys, max_tokens=1000)
-                if result:
-                    tasks[-1]["result"] = result; tasks[-1]["status"] = "Done"; tasks[-1]["engine"] = engine
-                    jsave(TF, tasks)
-                    st.success(f"✅ {assigned} completed — via {engine}")
-                    st.markdown(f"""<div class='card card-g'><pre style='white-space:pre-wrap;color:#e0e0e0;font-family:Inter,sans-serif;font-size:.88em;'>{result}</pre></div>""", unsafe_allow_html=True)
-                    send_telegram(f"✅ Agent Task Done\n{assigned}: {task_desc[:80]}")
-                else:
-                    tasks[-1]["status"] = "Queued"; jsave(TF, tasks)
-                    st.warning("No AI engine — task queued. Start LM Studio or add OpenAI key.")
-            else: st.warning("Describe the task first.")
-    with c2:
-        if st.button("📋 Queue Task", use_container_width=True):
-            if task_desc.strip():
-                tasks.append({"id":len(tasks)+1,"desc":task_desc,"agent":agent_sel,"priority":priority,
-                              "status":"Queued","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
-                jsave(TF, tasks); st.success("Queued!")
-    with c3:
-        if st.button("🗑️ Clear Queue", use_container_width=True):
-            jsave(TF, []); st.success("Cleared."); st.rerun()
+    if exec_btn and task_desc.strip():
+        assigned  = agent_sel if agent_sel != "Auto-Select" else "Content Machine"
+        agent_sys = next((a["system"] for a in AGENTS if a["name"]==assigned), AGENTS[0]["system"])
+        tasks.append({"id":len(tasks)+1,"desc":task_desc,"agent":assigned,"priority":priority,
+                      "status":"Running","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
+        jsave(TF, tasks)
+        with st.spinner(f"{assigned} executing..."):
+            result, engine = ai_call(task_desc, system=agent_sys, max_tokens=1200)
+        if result:
+            tasks[-1].update({"result":result,"status":"Done","engine":engine})
+            jsave(TF, tasks)
+            st.success(f"✅ {assigned} — {engine}")
+            st.markdown(f"<div class='card card-g'><pre style='white-space:pre-wrap;color:#e0e0e0;font-size:.85em;'>{result}</pre></div>",
+                        unsafe_allow_html=True)
+            send_telegram(f"✅ Agent Done\n{assigned}: {task_desc[:80]}")
+        else:
+            tasks[-1]["status"] = "Queued"; jsave(TF, tasks)
+            st.warning("No AI engine — task queued.")
+
+    if queue_btn and task_desc.strip():
+        tasks.append({"id":len(tasks)+1,"desc":task_desc,"agent":agent_sel,"priority":priority,
+                      "status":"Queued","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
+        jsave(TF, tasks); st.success("Queued!")
+
+    if clear_btn:
+        jsave(TF, []); st.success("Cleared."); st.rerun()
 
     st.markdown("---")
-    st.markdown("### 📋 Daily Agent Assignment Sheet")
-    DAILY_TASKS = {
-        "✍️ Content Machine":["Write 3 LinkedIn posts","Draft newsletter for Friday","Create ad copy for top product","Write 5 TikTok scripts"],
-        "📧 Email Agent":["Send cold outreach batch (10 emails)","Follow up on unanswered emails","Draft onboarding sequence for new customers"],
-        "💬 Sales Bot":["Respond to all inquiries within 1 hour","Follow up with trial users","Send proposals to warm leads"],
-        "📊 Analytics Brain":["Generate weekly revenue report","Analyse customer churn","Identify top-performing products"],
-        "🚀 Deploy Master":["Deploy latest updates","Test all products in production","Monitor uptime and performance"],
-        "💻 Code Builder":["Build new feature for Email Assassin","Fix any reported bugs","Review and optimise existing code"],
+    st.markdown("### 📋 Daily Assignment Sheet")
+    DAILY = {
+        "✍️ Content Machine":["Write 3 LinkedIn posts","Draft weekly newsletter","Create ad copy for top product","Write 5 TikTok scripts","Generate 10 viral hooks"],
+        "📧 Email Agent":["Send cold outreach batch (10)","Follow up unanswered emails","Draft onboarding sequence","Write 3 testimonial requests"],
+        "💬 Sales Bot":["Respond to all inquiries","Follow up trial users","Send proposals to warm leads","Write objection handler scripts"],
+        "📊 Analytics Brain":["Generate weekly revenue report","Analyse customer churn","Identify top products","Build growth projection"],
+        "🚀 Deploy Master":["Deploy latest updates","Test all products","Monitor uptime","Plan next launch"],
+        "💻 Code Builder":["Build new feature","Fix reported bugs","Optimise existing code","Write API integration"],
+        "📱 Social Agent":["Schedule week of posts","Write platform-specific captions","Generate hashtag sets","Draft DM outreach messages"],
+        "🛡️ Security Agent":["Run compliance check","Update security log","Review access controls","Draft incident response plan"],
     }
-    for agent_name, daily in DAILY_TASKS.items():
-        with st.expander(f"📌 {agent_name}"):
-            for dt in daily:
-                col_dt, col_run = st.columns([4, 1])
-                with col_dt: st.markdown(f"- {dt}")
-                with col_run:
-                    if st.button("▶", key=f"run_{agent_name}_{dt}"):
-                        clean_name = agent_name.split(" ",1)[1] if " " in agent_name else agent_name
-                        agent_sys = next((a["system"] for a in AGENTS if a["name"]==clean_name), AGENTS[0]["system"])
+    for aname, dtasks in DAILY.items():
+        with st.expander(aname, expanded=False):
+            for dt in dtasks:
+                dc, dr = st.columns([5,1])
+                with dc:
+                    st.markdown(f"<span style='font-size:.83em;color:#444;'>▸ {dt}</span>", unsafe_allow_html=True)
+                with dr:
+                    bk = f"run_{aname}_{dt}".replace(" ","_")[:55]
+                    if st.button("▶", key=bk):
+                        clean = aname.split(" ",1)[1] if " " in aname else aname
+                        asys  = next((a["system"] for a in AGENTS if a["name"]==clean), AGENTS[0]["system"])
                         with st.spinner("Running..."):
-                            result, engine = ai_call(dt, system=agent_sys, max_tokens=600)
-                        if result:
-                            st.text_area("Result:", value=result, height=150, key=f"res_{agent_name}_{dt}")
+                            res, eng = ai_call(dt, system=asys, max_tokens=800)
+                        if res:
+                            st.text_area("Result:", value=res, height=180, key=f"res_{bk}")
 
     if tasks:
         st.markdown("---")
-        st.markdown("### 📋 Task Queue")
-        for t in reversed(tasks[-10:]):
-            sc = "#00ff41" if t.get("status")=="Done" else "#ffd700" if t.get("status")=="Running" else "#555"
-            st.markdown(f"""<div class='card'><span style='color:{sc};font-weight:700;font-size:.8em;'>[{t.get("status","?")}]</span> <strong style='font-size:.88em;'>{t.get("agent","?")}</strong> — <span style='font-size:.85em;'>{t.get("desc","")[:80]}</span> <span style='color:#222;float:right;font-size:.72em;'>{t.get("date","")} {t.get("time","")}</span></div>""", unsafe_allow_html=True)
+        st.markdown(f"### 📋 Task Queue ({len(tasks)})")
+        for t in reversed(tasks[-12:]):
+            sc = "#00ff41" if t.get("status")=="Done" else "#ffd700" if t.get("status")=="Running" else "#2a2a2a"
+            st.markdown(f"""<div class='card' style='padding:9px 14px;'>
+<span style='color:{sc};font-weight:700;font-size:.72em;'>[{t.get("status","?")}]</span>
+<strong style='font-size:.82em;'> {t.get("agent","?")}</strong>
+<span style='font-size:.8em;color:#444;'> — {t.get("desc","")[:65]}</span>
+<span style='color:#111;float:right;font-size:.68em;'>{t.get("date","")} {t.get("time","")}</span>
+</div>""", unsafe_allow_html=True)
             if t.get("result"):
-                with st.expander(f"View result"):
+                with st.expander("View result"):
                     st.text(t["result"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — AVATAR BUILDER
+# TAB 3 — AVATAR BUILDER (full pipeline + folder)
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[3]:
     st.markdown("## 🎭 Autonomous Avatar Builder")
-    st.markdown("<p style='color:#555;font-size:.85em;'>Drop in your idea — the AI builds the entire avatar to completion. Bio, scripts, content strategy, monetisation plan, platform setup. You direct, the agent executes.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#333;font-size:.8em;'>Drop in an idea → AI builds the complete persona, scripts, strategy, and launches the motion video.</p>",
+                unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        av_name     = st.text_input("Avatar Name:", "Mike Thompson")
-        av_niche    = st.selectbox("Niche:", ["Plumbing & Home Repair","Electrical","HVAC","Woodworking","Fitness & Health","Cooking & Food","Finance & Investing","Tech Reviews","Real Estate","Cybersecurity","Mining & Trades","Landscaping","Cleaning & Maintenance","Custom..."])
-        if av_niche == "Custom...": av_niche = st.text_input("Custom niche:")
-        av_idea     = st.text_area("Your idea / rough concept:", height=80, placeholder="e.g. Funny plumber in Sydney, targets homeowners, wants to sell a $97 DIY course. TikTok + YouTube.")
-        av_target   = st.text_input("Target audience:", "Homeowners aged 30–55, DIY enthusiasts")
-    with col2:
-        av_platforms= st.multiselect("Platforms:", ["YouTube","TikTok","Instagram","Twitter/X","Blog","Podcast","Email List","LinkedIn"], default=["YouTube","TikTok"])
-        av_goal     = st.slider("Monthly Revenue Goal ($):", 1000, 100000, 30000, step=1000)
-        av_voice    = st.selectbox("Voice Style:", ["Warm & Friendly","Professional","Energetic & Hype","Calm & Relaxed","Authoritative Expert","Funny & Relatable","Aussie Larrikin"])
-        av_monetise = st.multiselect("Monetisation:", ["Ad Revenue","Affiliate Links","Digital Products","Coaching/Consulting","Sponsorships","Online Courses","Merchandise","Services"], default=["Ad Revenue","Digital Products","Affiliate Links"])
+    av1, av2 = st.columns([1.4, 1])
+    with av1:
+        st.markdown("### ⚡ Build New Avatar")
+        av_idea = st.text_area("Your idea / niche / concept:",
+                               placeholder="e.g. 'Funny tradie in Sydney who talks about home security' or 'Professional female AI consultant targeting mining companies'",
+                               height=90, key="av_idea")
+        avc1, avc2, avc3 = st.columns(3)
+        with avc1:
+            av_platform = st.multiselect("Platforms:", ["TikTok","Instagram","YouTube","LinkedIn","Facebook","X"], default=["TikTok","Instagram"], key="av_plat")
+        with avc2:
+            av_tone = st.selectbox("Tone:", ["Funny & Relatable","Professional","Inspirational","Educational","Edgy & Bold","Australian Casual"], key="av_tone")
+        with avc3:
+            av_niche = st.selectbox("Niche:", ["Cybersecurity","AI Tools","Tradies","Small Business","Mining","Real Estate","Hospitality","General"], key="av_niche")
 
-    st.markdown("---")
-    if st.button("🚀 BUILD FULL AVATAR — AI Does Everything", use_container_width=True, type="primary"):
-        prompt = f"""Build a COMPLETE, ready-to-deploy autonomous avatar for:
-Name: {av_name} | Niche: {av_niche} | Concept: {av_idea}
-Target: {av_target} | Platforms: {', '.join(av_platforms)} | Revenue Goal: ${av_goal:,}/mo
-Voice: {av_voice} | Monetisation: {', '.join(av_monetise)}
+        av_build = st.button("🎭 BUILD FULL AVATAR", use_container_width=True, type="primary", key="av_build")
+        if av_build and av_idea.strip():
+            prompt = f"""Build a complete, fully autonomous AI avatar persona based on this idea:
+IDEA: {av_idea}
+PLATFORMS: {', '.join(av_platform)}
+TONE: {av_tone}
+NICHE: {av_niche}
 
-Deliver ALL of the following — fully written, not described:
+Deliver ALL of the following:
 
-## 1. AVATAR PROFILE
-Full bio (2 paragraphs), tagline, brand voice guide, posting schedule
+## PERSONA
+- Name, Age, Location, Backstory (3 sentences)
+- Personality traits (5 bullet points)
+- Signature catchphrase
+- Visual style description
 
-## 2. CONTENT STRATEGY
-5 content pillars with 3 post ideas each
+## CONTENT STRATEGY
+- Primary platform and why
+- Content pillars (4 topics they always talk about)
+- Posting frequency per platform
+- Best posting times
 
-## 3. SCRIPTS (write them in full)
-- 3 x TikTok/Reels scripts (60 seconds each, include hooks)
-- 2 x YouTube video outlines (5-7 min, with intro/sections/outro)
-- 5 x post captions ready to copy-paste
+## 10 READY-TO-FILM SCRIPTS
+For each script provide: Title, Hook (first 3 seconds), Full Script (60-90 seconds), CTA
 
-## 4. MONETISATION ROADMAP
-Month 1, 3, 6, 12 — specific revenue targets and actions to hit them
+## 30-DAY CONTENT CALENDAR
+Week 1-4 with specific post ideas per day for each platform
 
-## 5. PLATFORM SETUP CHECKLIST
-Step-by-step for each selected platform
+## MONETISATION PLAN
+- 3 revenue streams with specific amounts
+- First product to launch and price
+- Affiliate opportunities
+- Timeline to first $1,000
 
-## 6. FIRST 30 DAYS ACTION PLAN
-Week 1 day-by-day, Weeks 2-4 weekly
+## PLATFORM SETUP CHECKLIST
+- Bio copy for each platform (ready to paste)
+- Hashtag sets (10 per platform)
+- Profile optimisation tips
 
-## 7. PRODUCT IDEAS
-3 digital products this avatar could sell, with pricing and sales copy
+## VOICE & STYLE GUIDE
+- Words to always use
+- Words to never use
+- Editing style
+- Music/sound recommendations"""
+            with st.spinner("Building full avatar — this takes 30-60 seconds..."):
+                result, engine = ai_call(prompt, max_tokens=2500)
+            if result:
+                av_entry = {
+                    "id": len(avatars)+1,
+                    "idea": av_idea,
+                    "platforms": av_platform,
+                    "tone": av_tone,
+                    "niche": av_niche,
+                    "content": result,
+                    "engine": engine,
+                    "date": now.strftime("%Y-%m-%d"),
+                    "time": now.strftime("%H:%M"),
+                    "videos": []
+                }
+                avatars.append(av_entry)
+                jsave(AVF, avatars)
+                # Save to folder file
+                av_file = AVDIR / f"avatar_{av_entry['id']}_{now.strftime('%Y%m%d')}.txt"
+                av_file.write_text(f"AVATAR #{av_entry['id']}\nIdea: {av_idea}\nDate: {now}\nEngine: {engine}\n\n{result}")
+                st.success(f"✅ Avatar #{av_entry['id']} built via {engine} — saved to folder")
+                st.markdown(f"<div class='card card-p'><pre style='white-space:pre-wrap;color:#e0e0e0;font-size:.82em;line-height:1.7;'>{result}</pre></div>",
+                            unsafe_allow_html=True)
+                st.download_button("⬇ Download Avatar", result, f"avatar_{av_entry['id']}.txt", key="dl_av")
+            else:
+                st.warning("No AI engine — start LM Studio or check Settings.")
 
-Be specific. Write everything in full. This person executes today."""
+    with av2:
+        st.markdown("### 🎬 Motion Video Generator")
+        st.markdown("<p style='color:#333;font-size:.78em;'>Generate a talking motion avatar video from any script using HeyGen or D-ID.</p>",
+                    unsafe_allow_html=True)
 
-        with st.spinner(f"Building {av_name}'s complete avatar empire..."):
-            result, engine = ai_call(prompt, system=f"You are an expert avatar strategist and content creator. Build complete, fully-written, immediately executable avatar empires. Voice: {av_voice}. Niche: {av_niche}.", max_tokens=2500)
+        vid_platform = st.selectbox("Video Platform:", ["HeyGen","D-ID"], key="vid_plat")
+        vid_script   = st.text_area("Script for video:", height=120,
+                                    placeholder="Paste a script from your avatar build, or write a new one...",
+                                    key="vid_script")
 
-        if result:
-            avatars.append({"name":av_name,"niche":av_niche,"platforms":av_platforms,"goal":av_goal,
-                             "voice":av_voice,"monetise":av_monetise,"idea":av_idea,
-                             "created":now.strftime("%Y-%m-%d %H:%M"),"profile":result,"engine":engine})
-            jsave(AVF, avatars)
-            st.success(f"✅ {av_name} built via {engine}!")
-            st.markdown(f"""<div class='card card-g'><pre style='white-space:pre-wrap;color:#e0e0e0;font-family:Inter,sans-serif;font-size:.85em;'>{result}</pre></div>""", unsafe_allow_html=True)
-            send_telegram(f"🎭 Avatar Built: {av_name} | {av_niche} | Goal: ${av_goal:,}/mo")
+        if vid_platform == "HeyGen":
+            st.markdown(f"<span class='pill-pink'>HeyGen API Key: {'✅ Set' if S.get('heygen_key') else '❌ Not set — add in Settings'}</span>",
+                        unsafe_allow_html=True)
+            if st.button("🎬 Generate HeyGen Video", use_container_width=True, type="primary", key="heygen_gen"):
+                if not S.get("heygen_key"):
+                    st.error("Add your HeyGen API key in Settings first.")
+                elif not vid_script.strip():
+                    st.warning("Enter a script first.")
+                else:
+                    with st.spinner("Sending to HeyGen..."):
+                        vid_id, msg = heygen_generate(vid_script, S.get("heygen_key",""))
+                    if vid_id:
+                        st.success(f"✅ {msg}")
+                        st.info(f"Video ID: `{vid_id}` — Check your HeyGen dashboard in 2-3 minutes")
+                    else:
+                        st.error(msg)
         else:
-            st.warning("No AI engine — start LM Studio or add OpenAI key in Settings.")
+            st.markdown(f"<span class='pill-pink'>D-ID API Key: {'✅ Set' if S.get('did_key') else '❌ Not set — add in Settings'}</span>",
+                        unsafe_allow_html=True)
+            if st.button("🎬 Generate D-ID Video", use_container_width=True, type="primary", key="did_gen"):
+                if not S.get("did_key"):
+                    st.error("Add your D-ID API key in Settings first.")
+                elif not vid_script.strip():
+                    st.warning("Enter a script first.")
+                else:
+                    with st.spinner("Sending to D-ID..."):
+                        vid_id, msg = did_generate(vid_script, S.get("did_key",""))
+                    if vid_id:
+                        st.success(f"✅ {msg}")
+                        st.info(f"Talk ID: `{vid_id}` — Check your D-ID dashboard")
+                    else:
+                        st.error(msg)
+
+        st.markdown("---")
+        st.markdown("### 🎙️ AI Script Generator")
+        sg_topic = st.text_input("Topic:", placeholder="e.g. Why tradies need cybersecurity", key="sg_topic")
+        sg_dur   = st.selectbox("Duration:", ["30 seconds","60 seconds","90 seconds","3 minutes"], key="sg_dur")
+        sg_plat  = st.selectbox("Platform:", ["TikTok","Instagram Reel","YouTube Short","LinkedIn"], key="sg_plat")
+        if st.button("✍️ Generate Script", use_container_width=True, key="sg_gen"):
+            if sg_topic.strip():
+                sp = f"Write a {sg_dur} talking-head video script for {sg_plat} about: {sg_topic}. Include: Hook (first 3 seconds to stop the scroll), Main content, CTA. Write it as spoken words, natural and conversational. Australian tone."
+                with st.spinner("Writing script..."):
+                    sres, seng = ai_call(sp, max_tokens=600)
+                if sres:
+                    st.text_area("Generated Script:", value=sres, height=200, key="sg_result")
+                    st.session_state["vid_script_prefill"] = sres
 
     st.markdown("---")
-    st.markdown("### 🎭 Magic Mike System — Checklist")
-    mike_items = ["Create avatar character & name","Generate voice profile (ElevenLabs)","Write first 10 scripts","Create first 5 videos","Set up YouTube channel","Set up TikTok account","Set up Instagram account","Configure auto-posting tool","Test full workflow end-to-end","Launch and monitor analytics"]
-    for item in mike_items:
-        st.checkbox(item, key=f"mike_{item}")
-
-    if avatars:
-        st.markdown("---")
-        st.markdown(f"### 🎭 Your Avatar Roster ({len(avatars)} built)")
+    st.markdown(f"### 📁 Avatar Folder ({len(avatars)} avatars)")
+    if not avatars:
+        st.markdown("<p style='color:#222;'>No avatars built yet. Use the builder above to create your first one.</p>",
+                    unsafe_allow_html=True)
+    else:
         for av in reversed(avatars):
-            with st.expander(f"🎭 {av['name']} — {av['niche']} ({av.get('created','')})"):
-                st.markdown(f"**Platforms:** {', '.join(av.get('platforms',[]))} | **Goal:** ${av.get('goal',0):,}/mo | **Engine:** {av.get('engine','')}")
-                if st.button(f"📄 View Full Profile", key=f"avp_{av['name']}_{av.get('created','')}"):
-                    st.text_area("Profile:", value=av.get("profile",""), height=400, key=f"avt_{av['name']}")
+            with st.expander(f"🎭 Avatar #{av['id']} — {av['idea'][:55]} · {av['date']}"):
+                avc1, avc2, avc3 = st.columns(3)
+                with avc1: st.markdown(f"<span class='pill-pink'>Tone: {av.get('tone','?')}</span>", unsafe_allow_html=True)
+                with avc2: st.markdown(f"<span class='pill-ai'>Niche: {av.get('niche','?')}</span>", unsafe_allow_html=True)
+                with avc3: st.markdown(f"<span class='pill-on'>Engine: {av.get('engine','?')}</span>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-size:.82em;color:#e0e0e0;white-space:pre-wrap;line-height:1.7;max-height:400px;overflow-y:auto;'>{av['content'][:2500]}...</div>",
+                            unsafe_allow_html=True)
+                afd1, afd2 = st.columns(2)
+                with afd1:
+                    st.download_button("⬇ Download", av["content"], f"avatar_{av['id']}.txt", key=f"dl_av_{av['id']}")
+                with afd2:
+                    if st.button("🗑️ Delete", key=f"del_av_{av['id']}"):
+                        avatars = [a for a in avatars if a["id"] != av["id"]]
+                        jsave(AVF, avatars); st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — EMAIL SUITE
+# TAB 4 — SOCIAL COMMAND CENTRE
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[4]:
-    st.markdown("## 📧 Email Suite")
-    et1, et2, et3, et4 = st.tabs(["📝 All 20 Templates","🤖 AI Auto-Reply","✉️ AI Email Writer","📅 Drip Sequences"])
+    st.markdown("## 📱 Social Command Centre")
+    st.markdown("<p style='color:#333;font-size:.8em;'>One idea → ready-to-post content for all 6 platforms. Copy, paste, post. Done.</p>",
+                unsafe_allow_html=True)
 
-    with et1:
-        st.markdown("### 📝 All 20 Ready-to-Send Templates")
-        TEMPLATES = {
-            "1. Cold Outreach — Mining/SOCI Act": {
-                "subject": "SOCI Act compliance in 5 minutes instead of 5 weeks",
-                "body": "G'day [Name],\n\nQuick question about [Company]'s cybersecurity compliance.\n\nAre you spending weeks preparing SOCI Act reports for the board?\n\nI've built an AI system that generates compliance documentation in minutes instead of months. Risk assessments, incident reports, gap analyses - all automated.\n\nFormer A&I Armour engineer. Worked with [mention any mutual connection or similar company].\n\nWorth a 15-minute call to show you how [Company X] cut their compliance overhead by 80%?\n\nAvailable Tuesday or Thursday this week.\n\nCheers,\n[Your Name]\n[Phone]"
-            },
-            "2. Warm Follow-Up — Tradies": {
-                "subject": "That admin tool I mentioned",
-                "body": "Hey [Name],\n\nRemember you said quoting takes you 2+ hours per job?\n\nI built the thing I was talking about - AI generates professional quotes in 2 minutes.\n\nYou type: \"Kitchen reno, replace taps, fix leak\"\nIt outputs: Full itemized quote with pricing, scope, timeline, T&Cs\n\nAlready saving [Mate's Name] 10+ hours per week.\n\n$197/month. Try it free for a week?\n\nLet me know - I'll set you up today.\n\nCheers,\n[Your Name]"
-            },
-            "3. LinkedIn Outreach — B2B": {
-                "subject": "[Name] - Quick AI question",
-                "body": "Hi [Name],\n\nSaw your post about [relevant topic].\n\nBuilt an AI tool that [solves specific problem]. Thought you might be interested given your work at [Company].\n\n[One-sentence description of tool]\n\nNot pitching - genuinely think this could help your team. Happy to show you a quick demo if you're curious.\n\n5 minutes on Zoom?\n\nCheers,\n[Your Name]"
-            },
-            "4. Follow-Up After Demo": {
-                "subject": "Re: AI Email Assassin demo",
-                "body": "[Name],\n\nThanks for jumping on the call yesterday.\n\nAs discussed, AI Email Assassin would save your team ~15 hours per week on email responses.\n\nQuick recap:\n• Paste email → AI drafts response in 10 seconds\n• $97/month for unlimited use\n• 7-day free trial (no credit card)\n\nNext steps:\n1. Try it this week (link below)\n2. Quick check-in Friday\n3. If it works, convert to paid\n\nTrial link: [URL]\n\nQuestions? Just reply to this.\n\nCheers,\n[Your Name]"
-            },
-            "5. Objection Handler — Price": {
-                "subject": "Re: Pricing question",
-                "body": "[Name],\n\nFair question on the $697/month for Lead Generator.\n\nQuick math:\n\nYour sales team spends ~20 hours/week finding leads manually.\nThat's 80 hours/month.\n\nAt $50/hour = $4,000 in labor costs.\n\nLead Generator:\n• Finds 100+ qualified leads/month\n• Auto-generates outreach\n• Tracks responses\n• Costs $697\n\nSo you save $3,303/month while getting better leads.\n\nPlus if you close even ONE extra deal from those leads, it pays for itself 10x over.\n\nMake sense?\n\nHappy to do a 1-month trial at 50% off ($348) so you can prove ROI before committing.\n\nKeen?\n\nCheers,\n[Your Name]"
-            },
-            "6. Welcome — New Customer": {
-                "subject": "Welcome to [Product Name]! Here's how to get started",
-                "body": "Hey [Name]!\n\nStoked to have you on board with [Product Name]. 🎉\n\nHere's your getting started guide:\n\nStep 1: Login\nURL: [link]\nEmail: [their email]\nPassword: Check your separate email\n\nStep 2: Try your first [task]\n[Quick win instructions - 3 steps max]\n\nStep 3: Watch this 2-min tutorial\n[Video link]\n\nNeed help?\nReply to this email or book a call: [calendar link]\n\nCommon questions:\n• [FAQ 1 with answer]\n• [FAQ 2 with answer]\n\nLet's crush it!\n\n[Your Name]\n[Support email]\n[Phone]"
-            },
-            "7. Day 3 Check-In": {
-                "subject": "How's [Product] working for you?",
-                "body": "Hey [Name],\n\n3 days in - wanted to check how [Product] is treating you.\n\nQuick questions:\n1. Have you [completed key action]?\n2. Any issues or confusion?\n3. What would make this better for you?\n\nHit reply and let me know. I read every response.\n\nAlso, pro tip: [specific feature they might not have discovered]\n\nCheers,\n[Your Name]"
-            },
-            "8. Renewal Reminder": {
-                "subject": "Your [Product] subscription renews in 3 days",
-                "body": "Hey [Name],\n\nQuick heads up - your [Product Name] subscription renews on [date].\n\nThis month you:\n• [Stat 1 - tasks completed]\n• [Stat 2 - time saved]\n• [Stat 3 - value delivered]\n\nRenewal: $[amount] on [date]\n\nAll good to continue? You don't need to do anything - it'll auto-renew.\n\nWant to cancel or have questions? Just reply.\n\nCheers,\n[Your Name]"
-            },
-            "9. Feature Update": {
-                "subject": "New feature just for you 🎁",
-                "body": "Hey [Name],\n\nJust shipped something you're going to love.\n\n[Product Name] now has [new feature].\n\nWhat it does:\n[Benefit in one sentence]\n\nHow to use it:\n1. [Step 1]\n2. [Step 2]\n3. [Step 3]\n\nThis was our most-requested feature. Thanks for the feedback.\n\nTry it out and let me know what you think!\n\nCheers,\n[Your Name]"
-            },
-            "10. Win-Back — Churned Customer": {
-                "subject": "We miss you at [Product Name]",
-                "body": "Hey [Name],\n\nNoticed you cancelled [Product Name] last month.\n\nNo hard feelings - but I'm curious what happened.\n\nWas it:\n• Price?\n• Missing features?\n• Didn't see value?\n• Just didn't need it anymore?\n\nQuick 2-minute call? I'd love to understand what went wrong so we can improve.\n\nPlus, if you're willing to give us another shot, I'll comp you a month free to try the new features we've added.\n\nNo pressure either way.\n\nCheers,\n[Your Name]"
-            },
-            "11. Partnership / Collaboration Pitch": {
-                "subject": "Partnership idea for [Their Company]",
-                "body": "Hey [Name],\n\nLove what you're doing with [Their Company].\n\nI built [Your Product] which helps [their audience] with [problem].\n\nThought we could collaborate:\n\nOption 1: Affiliate partnership\nYou promote to your audience, earn 20% recurring commission.\n\nOption 2: Co-marketing\nJoint webinar, share audiences, both benefit.\n\nOption 3: Integration\n[Your Product] + [Their Product] = better solution for customers.\n\nInterested in exploring any of these?\n\n15-min call to discuss?\n\nCheers,\n[Your Name]"
-            },
-            "12. Guest Post Pitch": {
-                "subject": "Article idea for [Their Blog]",
-                "body": "Hey [Name],\n\nRegular reader of [Their Blog]. Loved your recent post on [topic].\n\nI'd like to contribute an article:\n\nTitle: \"[Specific, valuable title]\"\n\nWhy your audience will love it:\n[Benefit 1]\n[Benefit 2]\n[Benefit 3]\n\nMy credentials:\n[Relevant experience/expertise]\n\nNot promoting anything - just want to provide value to your readers.\n\nInterested?\n\nCheers,\n[Your Name]"
-            },
-            "13. Bug Report Response": {
-                "subject": "Re: [Bug description]",
-                "body": "Hey [Name],\n\nThanks for reporting this. Sorry you're experiencing [issue].\n\nWhat's happening:\nI've logged this as a priority bug. Our team is investigating.\n\nTemporary workaround:\n[If applicable - steps to work around the issue]\n\nTimeline:\nWe'll have a fix deployed by [date/time].\n\nI'll update you as soon as it's resolved.\n\nAppreciate your patience!\n\nCheers,\n[Your Name]\n[Support ticket #]"
-            },
-            "14. Feature Request Response": {
-                "subject": "Re: Feature request - [Feature name]",
-                "body": "Hey [Name],\n\nLove this idea for [Feature].\n\nGood news: This is already on our roadmap for [timeframe].\n\nI've added your vote to the request and cc'd you on the development ticket. You'll get updates as we build it.\n\nIn the meantime, [alternative solution if available].\n\nThanks for making [Product] better!\n\nCheers,\n[Your Name]"
-            },
-            "15. Daily Agent Task Assignment": {
-                "subject": "Agent Tasks - [Date]",
-                "body": "Agent Squad,\n\nToday's priorities:\n\nCode Builder:\n- [ ] Build [feature] for [product]\n- [ ] Fix bug in [product]\n- [ ] Review PR #47\n\nContent Machine:\n- [ ] Write ad copy for [product launch]\n- [ ] Create 3 LinkedIn posts\n- [ ] Draft newsletter for Friday\n\nDeploy Master:\n- [ ] Deploy [product] to Streamlit Cloud\n- [ ] Test [feature] in production\n- [ ] Monitor uptime\n\nSales Bot:\n- [ ] Respond to 12 inquiries\n- [ ] Follow up with [customer]\n- [ ] Send proposal to [prospect]\n\nAnalytics Brain:\n- [ ] Generate weekly revenue report\n- [ ] Analyse customer churn data\n- [ ] Identify top-performing products\n\nAll due EOD.\n\nGo!"
-            },
-            "16. Testimonial Request": {
-                "subject": "Quick favor? 2-minute testimonial",
-                "body": "Hey [Name],\n\nYou've been using [Product] for [timeframe] now and I'm seeing great results on your account.\n\nWould you be willing to share a quick testimonial?\n\nJust answer these 3 questions:\n1. What problem were you trying to solve?\n2. How has [Product] helped?\n3. What results have you seen?\n\n2-3 sentences total. That's it.\n\nI'll use it on the website (with your permission) to help others like you find the solution.\n\nHappy to return the favor anytime!\n\nCheers,\n[Your Name]"
-            },
-            "17. Referral Request": {
-                "subject": "Know anyone who needs [solution]?",
-                "body": "Hey [Name],\n\nQuick question: Do you know anyone else struggling with [problem that your product solves]?\n\nI'm opening up 5 spots for new customers this month and thought you might know someone who'd benefit.\n\nReferral bonus:\nFor each person you refer who becomes a customer, you get:\n• $100 credit to your account\n• They get 50% off first month\n\nJust forward this email or send me their details.\n\nWin-win!\n\nCheers,\n[Your Name]"
-            },
-            "18. Upsell — Upgrade to Pro": {
-                "subject": "Ready to level up? Pro features unlocked",
-                "body": "Hey [Name],\n\nYou've been crushing it with [Product Name] Starter.\n\nStats:\n• [Metric 1]\n• [Metric 2]\n• [Metric 3]\n\nYou're hitting the limits of Starter plan.\n\nUpgrade to Pro and get:\n• [Feature 1]\n• [Feature 2]\n• [Feature 3]\n• Priority support\n\nJust $[price difference more]/month.\n\nWant to try Pro free for 7 days?\n\nClick here: [upgrade link]\n\nCheers,\n[Your Name]"
-            },
-            "19. Inactive User Nudge": {
-                "subject": "We miss you at [Product Name]!",
-                "body": "Hey [Name],\n\nHaven't seen you in [Product Name] for a couple weeks.\n\nEverything okay?\n\nJust a reminder of what's waiting for you:\n• [Feature 1]\n• [Feature 2]\n• [New thing they haven't tried]\n\nPlus we just added: [new feature]\n\nTakes 2 minutes to jump back in: [login link]\n\nNeed help getting started again? Hit reply.\n\nCheers,\n[Your Name]"
-            },
-            "20. Weekly Newsletter": {
-                "subject": "This Week in [Your Niche] + Product Updates",
-                "body": "Hey [Name],\n\nQuick hits from this week:\n\n🔥 What's New:\n• [Product update or new feature]\n• [Industry news relevant to audience]\n• [Customer win/case study]\n\n💡 Tip of the Week:\n[One actionable tip related to your product - 2-3 sentences]\n\n📊 By the Numbers:\n• [Interesting stat 1]\n• [Interesting stat 2]\n\n🎯 Coming Soon:\n[Tease upcoming feature or content]\n\nThat's it! See you next week.\n\nCheers,\n[Your Name]\n\nP.S. [One-liner CTA or fun fact]"
-            },
-        }
+    soc_tabs = st.tabs(["🚀 All Platforms","📘 Facebook","📸 Instagram","💼 LinkedIn","🎵 TikTok","▶️ YouTube","𝕏 X/Twitter","📩 DM Writer","📅 Content Calendar","🔍 Competitor Spy"])
 
-        selected_tpl = st.selectbox("Choose template:", list(TEMPLATES.keys()))
-        tpl = TEMPLATES[selected_tpl]
-        st.markdown(f"**Subject:** `{tpl['subject']}`")
-        edited = st.text_area("Email body (edit as needed):", value=tpl["body"], height=280)
-        col_copy, col_ai = st.columns(2)
-        with col_copy:
-            if st.button("📋 Copy-Ready Format"):
-                st.code(f"Subject: {tpl['subject']}\n\n{edited}")
-        with col_ai:
-            if st.button("🤖 AI-Personalise This Template"):
-                context = st.text_input("Who is this for? (brief context):", placeholder="e.g. Mining company in Perth, 50 staff, compliance issues", key="tpl_ctx")
-                if context:
-                    result, engine = ai_call(f"Personalise this email template for: {context}\n\nTemplate:\nSubject: {tpl['subject']}\n\n{edited}\n\nFill in all [brackets] with specific, realistic details. Keep the same structure.", system="You are an expert email copywriter.", max_tokens=500)
-                    if result: st.text_area("Personalised:", value=result, height=250)
+    with soc_tabs[0]:
+        st.markdown("### ⚡ Generate for All Platforms")
+        sc_idea = st.text_area("Topic / Idea / Product:", height=80,
+                               placeholder="e.g. Why small businesses need AI-powered cybersecurity in 2025",
+                               key="sc_idea")
+        sc_brand = st.text_input("Brand voice:", value="ArmourVault.au — Australian, direct, no BS, cybersecurity + AI", key="sc_brand")
+        sc_gen = st.button("⚡ GENERATE ALL PLATFORMS", use_container_width=True, type="primary", key="sc_gen_all")
+        if sc_gen and sc_idea.strip():
+            prompt = f"""Create platform-specific social media content for this topic:
+TOPIC: {sc_idea}
+BRAND: {sc_brand}
 
-    with et2:
-        st.markdown("### 🤖 AI Auto-Reply Generator")
-        received = st.text_area("Paste the email you received:", height=150, placeholder="Paste the full email here...")
-        c1, c2 = st.columns(2)
-        with c1: tone = st.selectbox("Reply tone:", ["Professional","Friendly & Warm","Direct & Concise","Apologetic","Sales-Focused","Australian Casual"])
-        with c2: goal = st.selectbox("Goal:", ["Book a Call","Close the Sale","Handle Objection","Provide Information","Confirm / Acknowledge","Follow Up"])
-        if st.button("🤖 Generate Reply", use_container_width=True, type="primary"):
-            if received.strip():
-                result, engine = ai_call(
-                    f"You received this email:\n---\n{received}\n---\nWrite a reply. Tone: {tone}. Goal: {goal}. Be concise, human, include clear CTA. Australian tone. Just the email body, no subject line.",
-                    system="You are an expert email copywriter. Write replies that get results.", max_tokens=450)
-                if result: st.text_area("Your reply:", value=result, height=200)
-                else: st.warning("No AI engine available.")
-            else: st.warning("Paste an email first.")
+Generate ready-to-post content for each platform:
 
-    with et3:
-        st.markdown("### ✉️ AI Email Writer")
-        ew_purpose   = st.text_input("What's this email for?", placeholder="e.g. Cold outreach to a mortgage broker about my cybersecurity product")
-        ew_recipient = st.text_input("Who is it to?", placeholder="e.g. Small business owner, 40s, busy, skeptical")
-        c1, c2 = st.columns(2)
-        with c1: ew_tone = st.selectbox("Tone:", ["Professional","Friendly","Urgent","Casual","Authoritative","Australian Casual"])
-        with c2: ew_cta  = st.text_input("Call to Action:", placeholder="e.g. Book a 15-minute call")
-        if st.button("✍️ Write Email", use_container_width=True, type="primary"):
-            if ew_purpose.strip():
-                result, engine = ai_call(
-                    f"Write a complete high-converting email:\nPurpose: {ew_purpose}\nRecipient: {ew_recipient}\nTone: {ew_tone}\nCTA: {ew_cta}\n\nInclude: compelling subject line, opening hook, body (problem→solution→proof), clear CTA, sign-off.\nFormat: Subject: [subject] then blank line then body.",
-                    system="You are a world-class email copywriter.", max_tokens=550)
-                if result: st.text_area("Your email:", value=result, height=260)
-                else: st.warning("No AI engine available.")
-            else: st.warning("Describe what the email is for.")
+## FACEBOOK POST
+(Conversational, 150-300 words, 3-5 relevant hashtags, CTA)
 
-    with et4:
-        st.markdown("### 📅 Email Drip Sequences")
-        st.markdown("""<div class='card card-g'>
-<strong>Sequence 1: New Lead (7 Days)</strong><br>
-Day 1: Welcome + quick win &nbsp;|&nbsp; Day 2: Educational content (how-to) &nbsp;|&nbsp; Day 3: Case study (social proof)<br>
-Day 4: Free trial offer &nbsp;|&nbsp; Day 5: Objection handler (price/value) &nbsp;|&nbsp; Day 6: Scarcity/urgency &nbsp;|&nbsp; Day 7: Final CTA or pivot to nurture
-</div>
-<div class='card card-p'>
-<strong>Sequence 2: Free Trial (7 Days)</strong><br>
-Day 1: Welcome + setup guide &nbsp;|&nbsp; Day 2: Feature highlight #1 &nbsp;|&nbsp; Day 3: Check-in (are you stuck?)<br>
-Day 4: Feature highlight #2 &nbsp;|&nbsp; Day 5: Case study (results) &nbsp;|&nbsp; Day 6: Upgrade reminder &nbsp;|&nbsp; Day 7: Last chance to convert
-</div>""", unsafe_allow_html=True)
-        seq_product = st.text_input("Product name:", placeholder="e.g. Email Assassin")
-        seq_type    = st.selectbox("Sequence type:", ["New Lead (7 Days)","Free Trial (7 Days)","Post-Purchase (5 Days)","Win-Back (3 Days)","Onboarding (5 Days)"])
-        if st.button("🤖 Generate Full Sequence", use_container_width=True):
-            if seq_product.strip():
-                result, engine = ai_call(
-                    f"Write a complete {seq_type} email drip sequence for '{seq_product}'. Write every email in full — subject line and body. Punchy, Australian tone, focused on value and conversion.",
-                    system="You are an expert email sequence writer.", max_tokens=2000)
-                if result: st.text_area("Your sequence:", value=result, height=400)
-                else: st.warning("No AI engine available.")
+## INSTAGRAM CAPTION
+(Punchy opening line, 100-200 words, 20-25 hashtags, CTA, emoji-friendly)
+
+## INSTAGRAM REEL SCRIPT
+(30-60 second talking head script with hook, content, CTA)
+
+## LINKEDIN POST
+(Professional, thought leadership angle, 200-400 words, 3-5 hashtags, no fluff)
+
+## TIKTOK SCRIPT
+(15-30 second script, strong hook in first 2 seconds, trending audio suggestion)
+
+## YOUTUBE SHORT SCRIPT
+(60 second script, thumbnail text suggestion, title, description, tags)
+
+## X/TWITTER THREAD
+(5-tweet thread, each under 280 chars, strong opener, ends with CTA)
+
+## STORY/REEL HOOK VARIATIONS
+(10 different opening lines to test)"""
+            with st.spinner("Generating all platforms..."):
+                sc_result, sc_engine = ai_call(prompt, max_tokens=2500)
+            if sc_result:
+                st.success(f"✅ Generated via {sc_engine}")
+                st.markdown(f"<div class='card card-p'><pre style='white-space:pre-wrap;color:#e0e0e0;font-size:.83em;line-height:1.75;'>{sc_result}</pre></div>",
+                            unsafe_allow_html=True)
+                st.download_button("⬇ Download All", sc_result, "social_content.txt", key="dl_sc")
+            else:
+                st.warning("No AI engine available.")
+
+    with soc_tabs[1]:
+        st.markdown("### 📘 Facebook Content")
+        fb_topic = st.text_input("Topic:", key="fb_topic")
+        fb_type  = st.selectbox("Type:", ["Engagement Post","Promotional Post","Story","Event","Group Post","Ad Copy"], key="fb_type")
+        if st.button("Generate Facebook Content", key="fb_gen"):
+            if fb_topic.strip():
+                p = f"Write a {fb_type} for Facebook about: {fb_topic}. Australian business tone, conversational, include 3-5 hashtags and a clear CTA. Optimise for Facebook's algorithm (engagement-focused)."
+                with st.spinner("Writing..."):
+                    r, e = ai_call(p, max_tokens=600)
+                if r: st.text_area("Result:", value=r, height=200, key="fb_result")
+
+    with soc_tabs[2]:
+        st.markdown("### 📸 Instagram Content")
+        ig_topic = st.text_input("Topic:", key="ig_topic")
+        ig_type  = st.selectbox("Type:", ["Feed Post","Reel Script","Story","Carousel","Bio","Ad Copy"], key="ig_type")
+        if st.button("Generate Instagram Content", key="ig_gen"):
+            if ig_topic.strip():
+                p = f"Write Instagram {ig_type} content about: {ig_topic}. Include punchy hook, body, 25 hashtags, CTA. Australian voice. Optimise for Instagram engagement."
+                with st.spinner("Writing..."):
+                    r, e = ai_call(p, max_tokens=700)
+                if r: st.text_area("Result:", value=r, height=220, key="ig_result")
+
+    with soc_tabs[3]:
+        st.markdown("### 💼 LinkedIn Content")
+        li_topic = st.text_input("Topic:", key="li_topic")
+        li_type  = st.selectbox("Type:", ["Thought Leadership Post","Case Study","Connection Request","InMail Outreach","Company Update","Article Intro"], key="li_type")
+        if st.button("Generate LinkedIn Content", key="li_gen"):
+            if li_topic.strip():
+                p = f"Write a LinkedIn {li_type} about: {li_topic}. Professional Australian tone, thought leadership angle, 200-400 words, 3-5 hashtags. No corporate fluff — be direct and insightful."
+                with st.spinner("Writing..."):
+                    r, e = ai_call(p, max_tokens=700)
+                if r: st.text_area("Result:", value=r, height=220, key="li_result")
+
+    with soc_tabs[4]:
+        st.markdown("### 🎵 TikTok Content")
+        tt_topic = st.text_input("Topic:", key="tt_topic")
+        tt_dur   = st.selectbox("Duration:", ["15 seconds","30 seconds","60 seconds","3 minutes"], key="tt_dur")
+        if st.button("Generate TikTok Script", key="tt_gen"):
+            if tt_topic.strip():
+                p = f"Write a {tt_dur} TikTok script about: {tt_topic}. MUST have a scroll-stopping hook in the first 2 seconds. Conversational, Australian, punchy. Include: Hook, Content, CTA, trending sound suggestion, on-screen text suggestions."
+                with st.spinner("Writing..."):
+                    r, e = ai_call(p, max_tokens=600)
+                if r: st.text_area("Result:", value=r, height=220, key="tt_result")
+
+    with soc_tabs[5]:
+        st.markdown("### ▶️ YouTube Content")
+        yt_topic = st.text_input("Topic:", key="yt_topic")
+        yt_type  = st.selectbox("Type:", ["Short Script (60s)","Long Form Script","Title + Description + Tags","Thumbnail Text Ideas","Community Post"], key="yt_type")
+        if st.button("Generate YouTube Content", key="yt_gen"):
+            if yt_topic.strip():
+                p = f"Create YouTube {yt_type} for: {yt_topic}. Optimise for YouTube SEO. Australian business focus. Include all metadata if applicable."
+                with st.spinner("Writing..."):
+                    r, e = ai_call(p, max_tokens=800)
+                if r: st.text_area("Result:", value=r, height=220, key="yt_result")
+
+    with soc_tabs[6]:
+        st.markdown("### 𝕏 X/Twitter Content")
+        x_topic = st.text_input("Topic:", key="x_topic")
+        x_type  = st.selectbox("Type:", ["Single Tweet","5-Tweet Thread","10-Tweet Thread","Reply","Bio"], key="x_type")
+        if st.button("Generate X Content", key="x_gen"):
+            if x_topic.strip():
+                p = f"Write a {x_type} for X/Twitter about: {x_topic}. Punchy, direct, Australian voice. Under 280 chars per tweet. Strong hook, clear value, CTA at end."
+                with st.spinner("Writing..."):
+                    r, e = ai_call(p, max_tokens=600)
+                if r: st.text_area("Result:", value=r, height=200, key="x_result")
+
+    with soc_tabs[7]:
+        st.markdown("### 📩 DM / Message Writer")
+        dm_name    = st.text_input("Person's name / handle:", placeholder="e.g. John Smith or @johntrades", key="dm_name")
+        dm_context = st.text_area("Context:", height=70,
+                                  placeholder="e.g. Tradie in Brisbane, 500 followers, posts about plumbing jobs, looking to grow his business",
+                                  key="dm_context")
+        dm_platform = st.selectbox("Platform:", ["Facebook","Instagram","LinkedIn","TikTok","X"], key="dm_plat")
+        dm_goal     = st.selectbox("Goal:", ["Cold Outreach","Follow-Up","Partnership","Collaboration","Sales","Networking"], key="dm_goal")
+        if st.button("✍️ Write DM", use_container_width=True, type="primary", key="dm_gen"):
+            if dm_name.strip():
+                p = f"Write a {dm_goal} DM for {dm_platform} to: {dm_name}. Context: {dm_context}. Keep it short (under 150 words), personal, not salesy. Australian tone. No generic openers. Reference something specific about them if context is given."
+                with st.spinner("Writing DM..."):
+                    r, e = ai_call(p, max_tokens=400)
+                if r:
+                    st.text_area("Your DM (copy and send):", value=r, height=160, key="dm_result")
+                    st.success("Ready to copy and paste!")
+
+    with soc_tabs[8]:
+        st.markdown("### 📅 30-Day Content Calendar")
+        cal_niche = st.text_input("Niche/Business:", value="Cybersecurity and AI tools for small business", key="cal_niche")
+        cal_plats = st.multiselect("Platforms:", ["TikTok","Instagram","LinkedIn","Facebook","YouTube","X"], default=["TikTok","Instagram","LinkedIn"], key="cal_plats")
+        if st.button("📅 Generate 30-Day Calendar", use_container_width=True, type="primary", key="cal_gen"):
+            if cal_niche.strip():
+                p = f"Create a detailed 30-day social media content calendar for: {cal_niche}\nPlatforms: {', '.join(cal_plats)}\n\nFor each day provide: Day number, Platform, Content type, Topic/Hook, CTA. Format as a clear table or structured list. Include a mix of educational, promotional, entertaining, and engagement content."
+                with st.spinner("Building 30-day calendar..."):
+                    r, e = ai_call(p, max_tokens=2000)
+                if r:
+                    st.text_area("30-Day Calendar:", value=r, height=400, key="cal_result")
+                    st.download_button("⬇ Download Calendar", r, "content_calendar.txt", key="dl_cal")
+
+    with soc_tabs[9]:
+        st.markdown("### 🔍 Competitor Spy Tool")
+        comp_url  = st.text_input("Competitor URL or handle:", placeholder="e.g. https://competitor.com.au or @competitorhandle", key="comp_url")
+        comp_info = st.text_area("What you know about them:", height=80,
+                                 placeholder="e.g. They sell AI chatbots to tradies, charge $199/mo, active on LinkedIn and Instagram, 2k followers",
+                                 key="comp_info")
+        if st.button("🔍 Analyse Competitor", use_container_width=True, type="primary", key="comp_gen"):
+            if comp_info.strip():
+                p = f"Analyse this competitor and tell me how to beat them:\nCompetitor: {comp_url}\nKnown info: {comp_info}\n\nProvide:\n1. Their likely strengths\n2. Their likely weaknesses and gaps\n3. How to position against them\n4. Content angles they're probably missing\n5. Pricing strategy to undercut or outvalue them\n6. 5 specific things I can do this week to take their customers\n\nBe specific, direct, and ruthless."
+                with st.spinner("Analysing competitor..."):
+                    r, e = ai_call(p, max_tokens=1000)
+                if r: st.text_area("Competitor Analysis:", value=r, height=300, key="comp_result")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — LEAD SCRAPER
+# TAB 5 — SECURITY OPERATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[5]:
-    st.markdown("## 🔍 Lead & Email Scraper")
-    ls1, ls2, ls3 = st.tabs(["📋 From Text","🌐 From URL","👥 Lead Manager"])
+    st.markdown("## 🛡️ Security Operations Centre")
+    st.markdown("<p style='color:#333;font-size:.8em;'>ArmourVault.au — Cybersecurity tools, SOCI Act compliance, client reports, and the 3-tier quote system.</p>",
+                unsafe_allow_html=True)
 
-    with ls1:
-        raw = st.text_area("Paste any text, webpage content, or directory listing:", height=150)
-        if st.button("🔍 Extract Emails", use_container_width=True, type="primary"):
-            found = scrape_emails(raw)
-            if found:
-                st.success(f"Found {len(found)} emails!")
-                for e in found: st.markdown(f"- `{e}`")
-                if st.button("💾 Save All to Lead List", key="save_text_leads"):
-                    added = 0
-                    for e in found:
-                        if not any(l.get("email") == e for l in leads):
-                            leads.append({"email":e,"source":"text","added":now.strftime("%Y-%m-%d"),"status":"New","notes":""})
-                            added += 1
-                    jsave(LF, leads); st.success(f"Saved {added} new leads!"); st.rerun()
-            else: st.info("No emails found in the text.")
+    sec_tabs = st.tabs(["⚡ Quick Quote","📋 SOCI Compliance","📊 Client Report","🔒 Threat Advisor","📁 Client Tracker","💡 3yr 3mo Rule"])
 
-    with ls2:
-        if not online: st.warning("⚠️ URL scraping requires internet connection.")
-        url_in = st.text_input("Website URL:", placeholder="https://example.com/contact")
-        bulk   = st.text_area("Or multiple URLs (one per line):", height=80)
-        if st.button("🚀 Scrape", use_container_width=True, type="primary"):
-            if not online: st.error("No internet connection.")
+    with sec_tabs[0]:
+        st.markdown("### ⚡ 3-Tier Quick Quote Generator")
+        st.markdown("<p style='color:#333;font-size:.78em;'>Based on staff count + cameras. Instant quote, no back-and-forth.</p>",
+                    unsafe_allow_html=True)
+        qc1, qc2, qc3 = st.columns(3)
+        with qc1:
+            q_biz   = st.text_input("Business name:", key="q_biz")
+            q_type  = st.selectbox("Business type:", ["Insurance Broker","Mortgage Broker","Mining","Medical Centre","Tradie","Retail","Hospitality","NDIS","Other"], key="q_type")
+        with qc2:
+            q_staff = st.number_input("Number of staff:", min_value=1, max_value=500, value=5, key="q_staff")
+            q_cams  = st.number_input("Number of cameras:", min_value=0, max_value=200, value=4, key="q_cams")
+        with qc3:
+            q_tier  = st.selectbox("System tier:", ["Tier 1 — Small (up to 4 cams)","Tier 2 — Medium (5-12 cams)","Tier 3 — Large (13+ cams)"], key="q_tier")
+            q_grant = st.checkbox("Government grant eligible?", key="q_grant")
+
+        if st.button("⚡ GENERATE QUOTE", use_container_width=True, type="primary", key="q_gen"):
+            if q_tier.startswith("Tier 1"):
+                setup, monthly = 14950, 1000
+            elif q_tier.startswith("Tier 2"):
+                setup, monthly = 24950, 1500
             else:
-                urls = [u.strip() for u in ([url_in] + bulk.split("\n")) if u.strip() and u.startswith("http")]
-                all_found = []
-                with st.spinner(f"Scraping {len(urls)} URL(s)..."):
-                    for url in urls:
-                        try:
-                            r = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
-                            soup = BeautifulSoup(r.text, "html.parser")
-                            for e in scrape_emails(soup.get_text()):
-                                all_found.append({"email":e,"source":url})
-                        except: pass
-                if all_found:
-                    st.success(f"Found {len(all_found)} emails!")
-                    for item in all_found:
-                        st.markdown(f"- `{item['email']}` from `{item['source'][:50]}`")
-                    if st.button("💾 Save All"):
-                        added = 0
-                        for item in all_found:
-                            if not any(l.get("email") == item["email"] for l in leads):
-                                leads.append({"email":item["email"],"source":item["source"],"added":now.strftime("%Y-%m-%d"),"status":"New","notes":""})
-                                added += 1
-                        jsave(LF, leads); st.success(f"Saved {added} leads!"); st.rerun()
-                else: st.info("No emails found.")
+                setup, monthly = 39950, 2000
+            annual = monthly * 12
+            total_3yr = setup + (monthly * 39)
+            profit_est = total_3yr * 0.65
 
-    with ls3:
-        st.markdown(f"### 👥 Lead List ({len(leads)} total)")
-        col_f, col_clr = st.columns([4, 1])
-        with col_clr:
-            if st.button("🗑️ Clear All"): jsave(LF, []); st.rerun()
-        filter_status = st.selectbox("Filter:", ["All","New","Contacted","Replied","Converted","Dead"])
-        filtered = leads if filter_status == "All" else [l for l in leads if l.get("status") == filter_status]
-        for i, lead in enumerate(reversed(filtered[-50:])):
-            real_idx = leads.index(lead) if lead in leads else -1
-            sc = {"New":"#888","Contacted":"#00bfff","Replied":"#ffd700","Converted":"#00ff41","Dead":"#333"}.get(lead.get("status","New"),"#888")
-            col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
-            with col1: st.markdown(f"`{lead.get('email','')}` <span style='color:#333;font-size:.75em;'>{lead.get('source','')[:30]}</span>", unsafe_allow_html=True)
-            with col2: st.markdown(f"<span style='color:{sc};font-size:.8em;'>{lead.get('status','New')}</span>", unsafe_allow_html=True)
-            with col3:
-                new_status = st.selectbox("", ["New","Contacted","Replied","Converted","Dead"], key=f"ls_{i}", label_visibility="collapsed")
-            with col4:
-                if st.button("✅", key=f"lsave_{i}") and real_idx >= 0:
-                    leads[real_idx]["status"] = new_status; jsave(LF, leads); st.rerun()
+            st.markdown(f"""
+<div class='card' style='border:1px solid #ff006e;'>
+<h3 style='color:#ff006e;'>💼 QUOTE — {q_biz or 'Client'}</h3>
+<table style='width:100%;color:#e0e0e0;font-size:.9em;'>
+<tr><td>Business Type</td><td><b>{q_type}</b></td></tr>
+<tr><td>Staff / Cameras</td><td><b>{q_staff} staff / {q_cams} cameras</b></td></tr>
+<tr><td>System Tier</td><td><b>{q_tier}</b></td></tr>
+<tr><td style='color:#39ff14;'>Setup / Install Fee</td><td style='color:#39ff14;'><b>${setup:,}</b></td></tr>
+<tr><td style='color:#ff006e;'>Monthly Subscription</td><td style='color:#ff006e;'><b>${monthly:,}/mo</b></td></tr>
+<tr><td>Annual Value</td><td><b>${annual:,}/yr</b></td></tr>
+<tr><td>3yr 3mo Total Revenue</td><td><b>${total_3yr:,}</b></td></tr>
+<tr><td style='color:#39ff14;'>Estimated Profit (65%)</td><td style='color:#39ff14;'><b>${profit_est:,.0f}</b></td></tr>
+{'<tr><td style="color:#39ff14;">Grant Note</td><td style="color:#39ff14;">Eligible for government cybersecurity grant — mention to client</td></tr>' if q_grant else ''}
+</table>
+<p style='color:#888;font-size:.75em;margin-top:8px;'>Includes 3yr 3mo replacement guarantee. Free unit swap at 39 months.</p>
+</div>""", unsafe_allow_html=True)
+
+            quote_prompt = f"Write a professional quote follow-up email for {q_biz or 'the client'} ({q_type}, {q_staff} staff, {q_cams} cameras). Setup: ${setup:,}. Monthly: ${monthly:,}. Mention the 3-year 3-month free replacement guarantee. Australian professional tone. Keep it under 200 words."
+            with st.spinner("Generating follow-up email..."):
+                qe, _ = ai_call(quote_prompt, max_tokens=400)
+            if qe:
+                st.text_area("Follow-up Email (ready to send):", value=qe, height=180, key="q_email")
+
+    with sec_tabs[1]:
+        st.markdown("### 📋 SOCI Act Compliance Checker")
+        soci_biz  = st.text_input("Business name:", key="soci_biz")
+        soci_type = st.selectbox("Sector:", ["Mining","Energy","Water","Ports","Food","Health","Finance","Comms","Transport","Defence","Education"], key="soci_type")
+        soci_size = st.selectbox("Size:", ["Small (<20 staff)","Medium (20-200 staff)","Large (200+ staff)"], key="soci_size")
+        if st.button("📋 Generate SOCI Compliance Report", use_container_width=True, type="primary", key="soci_gen"):
+            p = f"Generate a SOCI Act (Security of Critical Infrastructure Act 2018, Australia) compliance checklist and gap analysis for: {soci_biz or 'the business'}, Sector: {soci_type}, Size: {soci_size}. Include: Key obligations, current risk areas, recommended actions, and how ArmourVault's plug-and-play system addresses each gap. Be specific and actionable."
+            with st.spinner("Generating compliance report..."):
+                r, e = ai_call(p, max_tokens=1200)
+            if r: st.text_area("SOCI Compliance Report:", value=r, height=350, key="soci_result")
+
+    with sec_tabs[2]:
+        st.markdown("### 📊 Client Security Report Generator")
+        cr_client = st.text_input("Client name:", key="cr_client")
+        cr_type   = st.selectbox("Report type:", ["Monthly Status","Quarterly Review","Annual Assessment","Incident Report","Post-Install Report"], key="cr_type")
+        cr_notes  = st.text_area("Notes / incidents this period:", height=80, key="cr_notes")
+        if st.button("📊 Generate Report", use_container_width=True, type="primary", key="cr_gen"):
+            p = f"Write a professional {cr_type} cybersecurity report for client: {cr_client}. Notes: {cr_notes or 'No incidents this period'}. Include: Executive summary, system status, threats detected/blocked, recommendations, next steps. Professional Australian business tone. ArmourVault.au branding."
+            with st.spinner("Generating report..."):
+                r, e = ai_call(p, max_tokens=1000)
+            if r:
+                st.text_area("Client Report:", value=r, height=300, key="cr_result")
+                st.download_button("⬇ Download Report", r, f"{cr_client}_report.txt", key="dl_cr")
+
+    with sec_tabs[3]:
+        st.markdown("### 🔒 Threat & Risk Advisor")
+        threat_q = st.text_area("Describe the threat or situation:", height=80,
+                                placeholder="e.g. Client received a phishing email, clicked a link, and their accountant's computer may be compromised",
+                                key="threat_q")
+        if st.button("🔒 Get Threat Advice", use_container_width=True, type="primary", key="threat_gen"):
+            if threat_q.strip():
+                p = f"As a cybersecurity expert, analyse this threat and provide immediate action steps: {threat_q}. Include: Severity rating, immediate actions (next 1 hour), short-term actions (next 24 hours), long-term prevention, and whether to notify authorities. Australian context."
+                with st.spinner("Analysing threat..."):
+                    r, e = ai_call(p, max_tokens=800)
+                if r: st.text_area("Threat Analysis:", value=r, height=280, key="threat_result")
+
+    with sec_tabs[4]:
+        st.markdown("### 📁 Client Tracker")
+        cl_data = jload(DATA_DIR/"clients.json", [])
+        with st.form("add_client_form"):
+            cfc1, cfc2, cfc3 = st.columns(3)
+            with cfc1:
+                cl_name   = st.text_input("Client name:", key="cl_name")
+                cl_type   = st.selectbox("Type:", ["Insurance Broker","Mortgage Broker","Mining","Medical","Tradie","Retail","Other"], key="cl_type_f")
+            with cfc2:
+                cl_tier   = st.selectbox("Tier:", ["Tier 1","Tier 2","Tier 3"], key="cl_tier")
+                cl_monthly= st.number_input("Monthly ($):", min_value=0, value=1000, key="cl_monthly")
+            with cfc3:
+                cl_status = st.selectbox("Status:", ["Active","Lead","Proposal Sent","Onboarding","Churned"], key="cl_status")
+                cl_next   = st.text_input("Next action:", key="cl_next")
+            if st.form_submit_button("➕ Add Client", use_container_width=True):
+                cl_data.append({"name":cl_name,"type":cl_type,"tier":cl_tier,"monthly":cl_monthly,"status":cl_status,"next":cl_next,"date":now.strftime("%Y-%m-%d")})
+                jsave(DATA_DIR/"clients.json", cl_data); st.rerun()
+        if cl_data:
+            total_mrr = sum(c.get("monthly",0) for c in cl_data if c.get("status")=="Active")
+            st.markdown(f"<span class='pill-ai'>Active MRR from Security Clients: ${total_mrr:,}/mo</span>", unsafe_allow_html=True)
+            st.dataframe([{"Name":c["name"],"Type":c["type"],"Tier":c["tier"],"Monthly":f"${c['monthly']:,}","Status":c["status"],"Next Action":c["next"]} for c in cl_data], use_container_width=True)
+
+    with sec_tabs[5]:
+        st.markdown("### 💡 The 3yr 3mo Rule — Calculator")
+        st.markdown("""<div class='card' style='border:1px solid #39ff14;font-size:.85em;color:#e0e0e0;'>
+<b style='color:#39ff14;'>How it works:</b><br>
+At 3 years and 3 months (39 months), the client gets a FREE unit replacement. The old unit is dismantled, rebuilt, and recycled (environmental marketing point). The last 3 months of subscription essentially covers the cost of the new unit. Early exits are a win — spare unit goes back to stock.
+</div>""", unsafe_allow_html=True)
+        r3c1, r3c2 = st.columns(2)
+        with r3c1:
+            r3_setup   = st.number_input("Setup fee ($):", value=14950, key="r3_setup")
+            r3_monthly = st.number_input("Monthly ($):", value=1000, key="r3_monthly")
+            r3_unit    = st.number_input("Unit cost ($):", value=4500, key="r3_unit")
+        with r3c2:
+            r3_total   = r3_setup + (r3_monthly * 39)
+            r3_profit  = r3_total - r3_unit
+            r3_margin  = (r3_profit / r3_total) * 100
+            st.markdown(f"""<div class='card'>
+<b>39-Month Revenue:</b> <span style='color:#39ff14;'>${r3_total:,}</span><br>
+<b>Unit Cost:</b> <span style='color:#ff006e;'>-${r3_unit:,}</span><br>
+<b>Net Profit:</b> <span style='color:#39ff14;font-size:1.2em;'>${r3_profit:,}</span><br>
+<b>Margin:</b> <span style='color:#39ff14;'>{r3_margin:.1f}%</span>
+</div>""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — PRODUCTS
+# TAB 6 — EMAIL SUITE (all 20 templates + AI tools)
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[6]:
-    st.markdown("## 📦 Product Suite — All 15 Products")
-    col_summary = st.columns(4)
-    col_summary[0].metric("Total MRR", f"${total_mrr:,}")
-    col_summary[1].metric("Live Products", sum(1 for p in products if p["status"]=="Live"))
-    col_summary[2].metric("Total Customers", total_customers)
-    col_summary[3].metric("ARR", f"${total_mrr*12:,}")
+    st.markdown("## 📧 Email Suite")
+    em_tabs = st.tabs(["📬 Templates","✍️ AI Email Writer","🔄 Auto-Reply","📮 Drip Sequences","📬 Gmail Inbox"])
 
-    for product in products:
-        status_color = {"Live":"#00ff41","Beta":"#ffd700","Ready":"#00bfff","Concept":"#555"}.get(product["status"],"#555")
-        with st.expander(f"{product['name']} — [{product['status']}] — ${product['price']}/{'mo' if product['billing']=='month' else 'once'}"):
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Price", f"${product['price']}/{'mo' if product['billing']=='month' else 'once'}")
-            c2.metric("Customers", product.get("customers", 0))
-            c3.metric("MRR", f"${product.get('mrr', 0):,}")
-            c4.metric("Status", product["status"])
+    EMAIL_TEMPLATES = {
+        "Cold Outreach — Mining/SOCI": {
+            "subject": "Your Cybersecurity Obligations Under the SOCI Act — Are You Covered?",
+            "body": """Hi [Name],
 
-            if product.get("checklist"):
-                st.markdown("**Launch Checklist:**")
-                for item, done in list(product["checklist"].items()):
-                    new_val = st.checkbox(item, value=done, key=f"chk_{product['name']}_{item}")
-                    if new_val != done:
-                        product["checklist"][item] = new_val; jsave(PF, products)
+I hope this message finds you well. My name is [Your Name] from ArmourVault.au.
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("🚀 Set Live", key=f"live_{product['name']}"):
-                    for p in products:
-                        if p["name"] == product["name"]: p["status"] = "Live"
-                    jsave(PF, products); st.success("Live!"); st.rerun()
-            with col2:
-                nc = st.number_input("Add customers:", 0, 1000, 0, key=f"nc_{product['name']}")
-                if st.button("➕ Update Customers", key=f"upd_{product['name']}"):
-                    for p in products:
-                        if p["name"] == product["name"]:
-                            p["customers"] = p.get("customers", 0) + nc
-                            if p["billing"] == "month": p["mrr"] = p["customers"] * p["price"]
-                    jsave(PF, products); st.success("Updated!"); st.rerun()
-            with col3:
-                if st.button("🤖 Write Launch Email", key=f"le_{product['name']}"):
-                    result, engine = ai_call(f"Write a launch announcement email for '{product['name']}' at ${product['price']}/{'month' if product['billing']=='month' else 'one-time'}. Punchy, exciting, Australian tone. Include subject line.", system="You are an expert product launch copywriter.", max_tokens=400)
-                    if result: st.text_area("Launch email:", value=result, height=200, key=f"let_{product['name']}")
+With the SOCI Act now in full effect, businesses in the mining sector face significant compliance obligations — and the penalties for non-compliance are severe.
 
-    st.markdown("---")
-    st.markdown("### ➕ Add New Product")
-    with st.form("new_prod"):
-        np_name = st.text_input("Name:"); np_price = st.number_input("Price ($):", 1, value=97)
-        np_bill = st.selectbox("Billing:", ["month","once"]); np_status = st.selectbox("Status:", ["Ready","Beta","Live","Concept"])
-        if st.form_submit_button("Add Product"):
-            products.append({"name":np_name,"price":np_price,"billing":np_bill,"status":np_status,"customers":0,"mrr":0,"checklist":{}})
-            jsave(PF, products); st.success(f"{np_name} added!"); st.rerun()
+We've developed a plug-and-play cybersecurity system specifically designed for Australian mining operations. It's fully compliant, installs in under a day, and requires zero ongoing management from your team.
+
+I'd love to show you how it works in a 15-minute call this week. Are you available Thursday or Friday?
+
+Best regards,
+[Your Name]
+ArmourVault.au | [Phone]"""
+        },
+        "Cold Outreach — Tradies": {
+            "subject": "Protect Your Business from Cyber Attacks — Built for Tradies",
+            "body": """G'day [Name],
+
+Quick one — are you protected if a hacker targets your business?
+
+Most tradies don't think about cybersecurity until it's too late. One ransomware attack can wipe your client list, your invoices, and your reputation overnight.
+
+At ArmourVault.au, we've built a simple, affordable plug-and-play system specifically for small businesses like yours. No tech knowledge needed. It just works.
+
+Starting from $1,000/month with a 3-year replacement guarantee.
+
+Worth a 10-minute chat? Reply here or call [Phone].
+
+Cheers,
+[Your Name]"""
+        },
+        "Cold Outreach — LinkedIn": {
+            "subject": "Quick question about your cybersecurity setup",
+            "body": """Hi [Name],
+
+Saw your profile and noticed you're running [Company]. Impressive work.
+
+I wanted to reach out because we've been helping businesses like yours in [Industry] get properly protected without the usual IT headaches.
+
+Our system is plug-and-play, fully compliant with Australian regulations, and comes with a 3-year guarantee.
+
+Would you be open to a quick 15-minute call to see if it's a fit?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "Follow-Up #1 (3 days)": {
+            "subject": "Following up — ArmourVault Cybersecurity",
+            "body": """Hi [Name],
+
+Just following up on my message from earlier this week.
+
+I know you're busy, so I'll keep it short — we help [Business Type] businesses get fully protected against cyber threats in under 24 hours, with zero disruption to your operations.
+
+If now isn't the right time, no worries at all. But if you'd like to see how it works, I'm happy to jump on a quick call at your convenience.
+
+[Your Name] | ArmourVault.au | [Phone]"""
+        },
+        "Follow-Up #2 (7 days)": {
+            "subject": "Last follow-up — [Company Name]",
+            "body": """Hi [Name],
+
+I don't want to keep filling your inbox, so this will be my last reach-out for now.
+
+If cybersecurity ever becomes a priority — whether it's a compliance requirement, a close call, or just peace of mind — we're here.
+
+You can book a free 15-minute assessment anytime at [Link].
+
+Take care,
+[Your Name] | ArmourVault.au"""
+        },
+        "Objection Handler — Too Expensive": {
+            "subject": "Re: Cost of ArmourVault System",
+            "body": """Hi [Name],
+
+Totally understand — cost is always a consideration.
+
+Here's the thing though: the average cost of a cyber attack on a small Australian business is $46,000. Our system starts at $1,000/month.
+
+That's $12,000/year vs a potential $46,000 loss — plus the reputational damage, the downtime, and the legal liability.
+
+We also offer government grant assistance for eligible businesses, which can significantly reduce your upfront cost.
+
+Worth a 10-minute call to explore your options?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "Onboarding — Welcome": {
+            "subject": "Welcome to ArmourVault — You're Protected",
+            "body": """Hi [Name],
+
+Welcome to ArmourVault.au — we're genuinely glad to have you on board.
+
+Your system is now active and monitoring 24/7. Here's what happens next:
+
+1. You'll receive your first monthly status report within 30 days
+2. Our team monitors your system around the clock — you don't need to do anything
+3. If anything unusual is detected, we'll contact you immediately
+
+Your 3-year 3-month replacement guarantee is now active from today's date.
+
+Any questions at all, reply to this email or call [Phone].
+
+Welcome to the team,
+[Your Name] | ArmourVault.au"""
+        },
+        "Win-Back — Churned Client": {
+            "subject": "We'd love to have you back — [Company Name]",
+            "body": """Hi [Name],
+
+It's been a while since we last spoke, and I wanted to reach out personally.
+
+The cyber threat landscape has changed significantly since you were last with us — ransomware attacks on Australian businesses are up 47% this year alone.
+
+We've also upgraded our system significantly. I'd love to show you what's new and see if there's a way we can work together again.
+
+No pressure at all — just a quick 10-minute catch-up if you're open to it.
+
+[Your Name] | ArmourVault.au | [Phone]"""
+        },
+        "Referral Request": {
+            "subject": "Quick favour — do you know anyone who needs this?",
+            "body": """Hi [Name],
+
+Hope everything's going well with your system — it's been great having you as a client.
+
+I wanted to ask a quick favour. If you know any other business owners who might benefit from what we do — especially in [Industry] — we'd love an introduction.
+
+For every referral that becomes a client, we'll give you one month free on your subscription.
+
+No pressure at all, just wanted to put it out there.
+
+Thanks as always,
+[Your Name] | ArmourVault.au"""
+        },
+        "Upsell — Tier Upgrade": {
+            "subject": "Your business has grown — time to upgrade your protection?",
+            "body": """Hi [Name],
+
+I noticed your team has grown since we first set you up. Congratulations — that's fantastic.
+
+I wanted to check in because your current Tier 1 system was designed for your previous setup. With more staff and more devices, you may benefit from upgrading to Tier 2 for broader coverage.
+
+The upgrade is seamless — no downtime, no reinstall. Just enhanced protection.
+
+Want me to put together a quick comparison for you?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "Testimonial Request": {
+            "subject": "Would you mind sharing your experience?",
+            "body": """Hi [Name],
+
+I hope you're happy with how everything's been running.
+
+We're building out our case studies and I'd love to feature [Company Name] as an example of how businesses in [Industry] are getting properly protected.
+
+Would you be open to a quick 5-minute call, or even just a few sentences via email about your experience?
+
+It would mean a lot to us — and I'd be happy to return the favour in any way I can.
+
+Thanks,
+[Your Name] | ArmourVault.au"""
+        },
+        "Partnership Pitch": {
+            "subject": "Partnership opportunity — ArmourVault.au x [Their Company]",
+            "body": """Hi [Name],
+
+I've been following [Their Company] for a while and I think there's a genuine opportunity for us to work together.
+
+We provide cybersecurity solutions to [Industry] businesses. You provide [Their Service]. Our clients often need both.
+
+A referral partnership would be mutually beneficial — we send clients your way, you send clients ours. Simple, no cost, no obligation.
+
+Would you be open to a 20-minute call to explore?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "Support Reply — General": {
+            "subject": "Re: Your Support Request — ArmourVault",
+            "body": """Hi [Name],
+
+Thanks for reaching out — we've received your message and we're on it.
+
+Our team is looking into [Issue] now and we'll have an update for you within [Timeframe].
+
+In the meantime, if it's urgent, please call [Phone] and we'll prioritise your case immediately.
+
+Thanks for your patience,
+[Your Name] | ArmourVault.au Support"""
+        },
+        "Weekly Newsletter": {
+            "subject": "This Week in Cyber — ArmourVault Weekly",
+            "body": """Hi [Name],
+
+Here's your weekly cybersecurity update from ArmourVault.au:
+
+🔴 THREAT ALERT: [Current threat summary]
+
+📊 THIS WEEK'S STATS:
+• [X] attacks blocked across our network
+• [Y] new vulnerabilities patched
+• [Z] businesses newly protected
+
+💡 TIP OF THE WEEK:
+[Practical tip]
+
+📰 IN THE NEWS:
+[Brief industry news item]
+
+Stay safe out there,
+[Your Name] | ArmourVault.au
+
+[Unsubscribe]"""
+        },
+        "Cold Outreach — Insurance Brokers": {
+            "subject": "Cybersecurity compliance is now affecting insurance premiums — are you covered?",
+            "body": """Hi [Name],
+
+Insurance brokers are increasingly being targeted by cybercriminals — and your clients' data is the prize.
+
+With the Privacy Act amendments now in effect, a single data breach can result in fines of up to $50 million. Your PI insurance won't cover that.
+
+ArmourVault.au provides a fully compliant, plug-and-play cybersecurity system designed specifically for financial services businesses. Install in a day, monitor forever.
+
+Can we find 15 minutes this week?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "Cold Outreach — Medical Centres": {
+            "subject": "Patient data protection — are you meeting your obligations?",
+            "body": """Hi [Name],
+
+Medical centres hold some of the most sensitive data in Australia — and they're one of the top targets for ransomware attacks.
+
+Under the My Health Records Act and the Privacy Act, you have strict obligations to protect patient data. A breach doesn't just mean fines — it means losing patient trust permanently.
+
+ArmourVault.au has built a healthcare-specific cybersecurity system that's fully compliant, installs without disrupting your practice, and monitors 24/7.
+
+I'd love to show you how it works. Are you free for a quick call this week?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "Cold Outreach — Mortgage Brokers": {
+            "subject": "ASIC is watching — is your client data secure?",
+            "body": """Hi [Name],
+
+Mortgage brokers handle some of the most sensitive financial data in Australia — and ASIC's cybersecurity expectations are getting stricter every year.
+
+One breach can end your licence, your reputation, and your business.
+
+ArmourVault.au provides a simple, affordable, fully compliant cybersecurity system built for financial services. No IT team needed. Just plug it in and you're protected.
+
+Worth a 15-minute conversation?
+
+[Your Name] | ArmourVault.au"""
+        },
+        "7-Day Drip — Day 1": {
+            "subject": "Welcome — here's what to expect",
+            "body": """Hi [Name],
+
+Thanks for your interest in ArmourVault.au.
+
+Over the next 7 days, I'm going to share some quick insights about cybersecurity for Australian businesses — no fluff, just practical stuff.
+
+Tomorrow: The #1 mistake small businesses make that leaves them wide open to attack.
+
+Talk soon,
+[Your Name] | ArmourVault.au"""
+        },
+        "7-Day Drip — Day 3": {
+            "subject": "The #1 mistake that gets Australian businesses hacked",
+            "body": """Hi [Name],
+
+The #1 mistake? Assuming it won't happen to them.
+
+47% of cyber attacks in Australia target small businesses. Why? Because they're easier targets than big corporations.
+
+The good news: protecting yourself doesn't have to be complicated or expensive.
+
+Tomorrow I'll show you exactly what proper protection looks like — and what it costs.
+
+[Your Name] | ArmourVault.au"""
+        },
+        "7-Day Drip — Day 7": {
+            "subject": "Ready to get protected? Here's your next step",
+            "body": """Hi [Name],
+
+This is the last email in this series.
+
+If you've been reading along, you now know:
+✅ Why small businesses are the #1 target
+✅ What a proper cybersecurity system looks like
+✅ How the SOCI Act affects your business
+✅ What it actually costs to get protected
+
+If you're ready to take the next step, book a free 15-minute assessment here: [Link]
+
+No obligation, no sales pressure. Just a straight conversation about what you need.
+
+[Your Name] | ArmourVault.au"""
+        }
+    }
+
+    with em_tabs[0]:
+        st.markdown("### 📬 All 20 Email Templates")
+        selected_template = st.selectbox("Select template:", list(EMAIL_TEMPLATES.keys()), key="em_select")
+        if selected_template:
+            tmpl = EMAIL_TEMPLATES[selected_template]
+            st.text_input("Subject:", value=tmpl["subject"], key="em_subj")
+            st.text_area("Body:", value=tmpl["body"], height=320, key="em_body")
+            st.download_button("⬇ Download Template", f"Subject: {tmpl['subject']}\n\n{tmpl['body']}", f"email_{selected_template[:20]}.txt", key="dl_em")
+
+    with em_tabs[1]:
+        st.markdown("### ✍️ AI Email Writer")
+        ew_to   = st.text_input("To (name/company):", key="ew_to")
+        ew_goal = st.selectbox("Goal:", ["Cold Outreach","Follow-Up","Proposal","Objection Handle","Onboarding","Support Reply","Partnership","Upsell","Referral Request"], key="ew_goal")
+        ew_ctx  = st.text_area("Context:", height=80, placeholder="e.g. Mining company, 50 staff, SOCI Act compliant, spoke at a conference last week", key="ew_ctx")
+        ew_tone = st.selectbox("Tone:", ["Professional Australian","Casual Friendly","Direct & Punchy","Formal Corporate"], key="ew_tone")
+        if st.button("✍️ Write Email", use_container_width=True, type="primary", key="ew_gen"):
+            if ew_to.strip():
+                p = f"Write a {ew_goal} email to {ew_to}. Context: {ew_ctx}. Tone: {ew_tone}. From ArmourVault.au. Include subject line. Under 200 words. No fluff."
+                with st.spinner("Writing email..."):
+                    r, e = ai_call(p, max_tokens=500)
+                if r: st.text_area("Email:", value=r, height=250, key="ew_result")
+
+    with em_tabs[2]:
+        st.markdown("### 🔄 AI Auto-Reply Generator")
+        ar_email = st.text_area("Paste the email you received:", height=150, key="ar_email")
+        ar_tone  = st.selectbox("Reply tone:", ["Professional","Friendly","Direct","Apologetic","Assertive"], key="ar_tone")
+        if st.button("🔄 Generate Reply", use_container_width=True, type="primary", key="ar_gen"):
+            if ar_email.strip():
+                p = f"Write a {ar_tone} reply to this email. From ArmourVault.au. Keep it concise and professional. Include subject line.\n\nOriginal email:\n{ar_email}"
+                with st.spinner("Writing reply..."):
+                    r, e = ai_call(p, max_tokens=500)
+                if r: st.text_area("Your Reply:", value=r, height=220, key="ar_result")
+
+    with em_tabs[3]:
+        st.markdown("### 📮 Drip Sequence Builder")
+        ds_lead = st.text_input("Lead name/company:", key="ds_lead")
+        ds_type = st.selectbox("Sequence type:", ["New Lead (7 days)","Free Trial (7 days)","Post-Purchase (30 days)","Win-Back (5 days)","Referral (3 days)"], key="ds_type")
+        if st.button("📮 Build Full Sequence", use_container_width=True, type="primary", key="ds_gen"):
+            if ds_lead.strip():
+                p = f"Build a complete {ds_type} email drip sequence for: {ds_lead}. ArmourVault.au cybersecurity business. Include all emails with: Day number, Subject line, Full email body. Australian professional tone. Each email under 150 words."
+                with st.spinner("Building sequence..."):
+                    r, e = ai_call(p, max_tokens=1500)
+                if r:
+                    st.text_area("Full Sequence:", value=r, height=400, key="ds_result")
+                    st.download_button("⬇ Download Sequence", r, f"drip_{ds_lead[:20]}.txt", key="dl_ds")
+
+    with em_tabs[4]:
+        st.markdown("### 📬 Gmail Inbox")
+        if not S.get("gmail_connected"):
+            st.markdown("""<div class='card' style='border:1px solid #ff006e;text-align:center;'>
+<h4 style='color:#ff006e;'>Gmail Not Connected</h4>
+<p style='color:#888;'>Connect your Gmail / Google Workspace in Settings to read and send emails from the dashboard.</p>
+</div>""", unsafe_allow_html=True)
+        else:
+            st.info("Gmail connected — inbox integration active.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 7 — REVENUE
+# TAB 7 — LEAD SCRAPER
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[7]:
-    st.markdown("## 💰 Revenue Dashboard")
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Total MRR", f"${total_mrr:,}")
-    k2.metric("ARR", f"${total_mrr*12:,}")
-    k3.metric("Customers", total_customers)
-    k4.metric("Today", f"${revenue.get('today',0):,}")
-    k5.metric("All-Time", f"${sum(e.get('amount',0) for e in revenue.get('history',[]))+revenue.get('today',0):,}")
+    st.markdown("## 🔍 Lead Scraper & CRM")
+    leads = jload(LEADS_FILE, [])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 💰 Revenue by Product")
-        for p in sorted(products, key=lambda x: x.get("mrr",0), reverse=True):
-            if p.get("mrr", 0) > 0:
-                pct = p["mrr"] / total_mrr if total_mrr > 0 else 0
-                st.markdown(f"**{p['name']}:** ${p['mrr']:,}/mo ({pct*100:.0f}%) — {p.get('customers',0)} customers")
-                st.progress(pct)
+    ls_tabs = st.tabs(["🔍 Scraper","📋 Lead List","➕ Manual Add"])
 
-        st.markdown("---")
-        st.markdown("### ➕ Log Revenue")
-        with st.form("rev_form"):
-            ra = st.number_input("Amount ($):", 1, value=100)
-            rs = st.text_input("Source:", placeholder="e.g. Email Assassin — new customer")
-            if st.form_submit_button("💰 Log It"):
-                revenue["today"] = revenue.get("today", 0) + ra
-                revenue.setdefault("history", []).append({"amount":ra,"source":rs,"date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
-                jsave(RF, revenue)
-                send_telegram(f"💰 Revenue logged: +${ra:,}\n{rs}")
-                st.success(f"+${ra:,} logged!"); st.rerun()
+    with ls_tabs[0]:
+        st.markdown("### 🔍 Email & Lead Scraper")
+        ls_input = st.text_area("Paste text, URL, or business info to extract leads from:", height=120, key="ls_input")
+        if st.button("🔍 Extract Leads", use_container_width=True, type="primary", key="ls_gen"):
+            if ls_input.strip():
+                import re
+                emails = list(set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', ls_input)))
+                phones = list(set(re.findall(r'(?:\+61|0)[2-9]\d{8}|(?:\+61|0)4\d{8}', ls_input)))
+                if emails or phones:
+                    st.success(f"Found {len(emails)} emails and {len(phones)} phone numbers")
+                    for em in emails:
+                        st.code(em)
+                    for ph in phones:
+                        st.code(ph)
+                    if emails:
+                        p = f"Based on these email addresses, identify likely business names and industries: {', '.join(emails[:10])}"
+                        with st.spinner("Enriching lead data..."):
+                            enriched, _ = ai_call(p, max_tokens=400)
+                        if enriched: st.text_area("Lead Enrichment:", value=enriched, height=150, key="ls_enriched")
+                else:
+                    st.info("No emails or phone numbers found. Try pasting more text or a business listing.")
 
-        st.markdown("### 📋 Revenue History")
-        for e in reversed(revenue.get("history", [])[-15:]):
-            st.markdown(f"<span style='color:#00ff41;'>+${e['amount']:,}</span> — {e.get('source','')} <span style='color:#222;font-size:.75em;'>{e.get('date','')} {e.get('time','')}</span>", unsafe_allow_html=True)
+    with ls_tabs[1]:
+        if not leads:
+            st.markdown("<p style='color:#222;'>No leads yet. Add them manually or use the scraper.</p>", unsafe_allow_html=True)
+        else:
+            total_leads  = len(leads)
+            hot_leads    = len([l for l in leads if l.get("status")=="Hot"])
+            converted    = len([l for l in leads if l.get("status")=="Converted"])
+            lc1,lc2,lc3 = st.columns(3)
+            with lc1: st.metric("Total Leads", total_leads)
+            with lc2: st.metric("Hot Leads", hot_leads)
+            with lc3: st.metric("Converted", converted)
+            st.dataframe([{"Name":l.get("name",""),"Email":l.get("email",""),"Industry":l.get("industry",""),"Status":l.get("status",""),"Notes":l.get("notes","")} for l in leads], use_container_width=True)
 
-    with col2:
-        st.markdown("### 📈 Growth Projection")
-        if CHART_LIB:
-            months = ["Now","M3","M6","M9","M12"]
-            proj   = [total_mrr, max(total_mrr*2.4,1), max(total_mrr*4.2,1), max(total_mrr*7,1), max(total_mrr*12,1)]
-            df = pd.DataFrame({"Month": months, "MRR": proj})
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df["Month"], y=df["MRR"], mode="lines+markers",
-                                     line=dict(color="#00ff41", width=3), marker=dict(size=8, color="#ff0080"),
-                                     fill="tozeroy", fillcolor="rgba(0,255,65,0.05)"))
-            fig.update_layout(paper_bgcolor="#000", plot_bgcolor="#000", font=dict(color="#555"),
-                              xaxis=dict(gridcolor="#0a0a0a"), yaxis=dict(gridcolor="#0a0a0a", tickprefix="$"),
-                              margin=dict(l=0,r=0,t=10,b=0), height=250)
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.markdown("### 🎯 Revenue Milestones")
-        for label, target in [("$5K MRR",5000),("$10K MRR",10000),("$25K MRR",25000),("$50K MRR",50000)]:
-            pct = min(total_mrr/target, 1.0)
-            col = "#00ff41" if pct>=1.0 else "#ffd700" if pct>0.5 else "#ff0080"
-            st.markdown(f"<span style='color:{col};font-weight:700;'>{label}</span> {'✅' if pct>=1.0 else f'{pct*100:.0f}%'}", unsafe_allow_html=True)
-            st.progress(pct)
-
-        st.markdown("### 💡 Revenue Projections")
-        for m, r in [("Month 1","$3K–$5K"),("Month 3","$12K–$15K"),("Month 6","$25K–$30K"),("Month 12","$50K+")]:
-            st.markdown(f"<span style='color:#333;'>{m}:</span> <strong style='color:#00ff41;'>{r} MRR</strong>", unsafe_allow_html=True)
+    with ls_tabs[2]:
+        with st.form("add_lead_form"):
+            lfc1, lfc2 = st.columns(2)
+            with lfc1:
+                l_name     = st.text_input("Name:", key="l_name")
+                l_email    = st.text_input("Email:", key="l_email")
+                l_phone    = st.text_input("Phone:", key="l_phone")
+            with lfc2:
+                l_industry = st.selectbox("Industry:", ["Mining","Insurance","Mortgage","Medical","Tradie","Retail","Other"], key="l_industry")
+                l_status   = st.selectbox("Status:", ["New","Contacted","Hot","Proposal Sent","Converted","Dead"], key="l_status")
+                l_notes    = st.text_input("Notes:", key="l_notes")
+            if st.form_submit_button("➕ Add Lead", use_container_width=True):
+                leads.append({"name":l_name,"email":l_email,"phone":l_phone,"industry":l_industry,"status":l_status,"notes":l_notes,"date":now.strftime("%Y-%m-%d")})
+                jsave(LEADS_FILE, leads); st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 8 — PODCAST STUDIO
+# TAB 8 — IDEAS NOTEPAD
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[8]:
-    st.markdown("## 🎙️ Podcast Studio")
-    st.markdown("<p style='color:#555;font-size:.85em;'>Generate full broadcast-ready podcast scripts using your local Llama. Paste into ElevenLabs or any TTS tool to create audio.</p>", unsafe_allow_html=True)
+    st.markdown("## 💡 Ideas Notepad")
+    st.markdown("<p style='color:#333;font-size:.8em;'>Drop ideas here. Tag them, vote on them, flag the good ones for building. Your product roadmap starts here.</p>",
+                unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        pod_title  = st.text_input("Episode Title:", placeholder="e.g. How AI is Killing the 9-5 for Tradies")
-        pod_topic  = st.text_area("Topic / Key Points:", height=90, placeholder="Cover: AI tools for small business, cost savings, real examples, call to action for free trial")
-        pod_length = st.selectbox("Length:", ["5 minutes (~700 words)","10 minutes (~1400 words)","20 minutes (~2800 words)"])
-        pod_style  = st.selectbox("Style:", ["Solo Host","Interview Format","Storytelling","Educational/How-To","News & Commentary"])
-    with col2:
-        pod_host   = st.text_input("Host Name:", "Max")
-        pod_guest  = st.text_input("Guest Name (interview only):", placeholder="Leave blank for solo")
-        pod_cta    = st.text_input("Call to Action:", placeholder="e.g. Visit avatarempire.com for a free trial")
-        pod_sponsor= st.text_input("Sponsor (optional):", placeholder="e.g. This episode brought to you by...")
+    ideas = jload(IDEAS_FILE, [])
 
-    if st.button("🎙️ Generate Full Podcast Script", use_container_width=True, type="primary"):
-        if pod_topic.strip():
-            prompt = f"""Write a complete, broadcast-ready podcast script:
-Title: {pod_title} | Host: {pod_host} | {"Guest: "+pod_guest if pod_guest else "Format: Solo"} | Style: {pod_style} | Length: {pod_length}
-Topic: {pod_topic} | CTA: {pod_cta} | {"Sponsor: "+pod_sponsor if pod_sponsor else ""}
+    with st.form("add_idea_form"):
+        ifc1, ifc2 = st.columns([2,1])
+        with ifc1:
+            i_idea = st.text_area("Your idea:", height=80, placeholder="e.g. Add a voice-to-task feature so I can speak tasks into the dashboard while driving", key="i_idea")
+        with ifc2:
+            i_cat  = st.selectbox("Category:", ["Dashboard Feature","New Product","Marketing","Business Process","AI Tool","Security","Revenue","Other"], key="i_cat")
+            i_pri  = st.selectbox("Priority:", ["🔥 High","⚡ Medium","💡 Low","🚀 Build Next"], key="i_pri")
+        if st.form_submit_button("💡 Add Idea", use_container_width=True):
+            ideas.append({"id":len(ideas)+1,"idea":i_idea,"category":i_cat,"priority":i_pri,"votes":0,"status":"New","date":now.strftime("%Y-%m-%d"),"ai_eval":""})
+            jsave(IDEAS_FILE, ideas); st.rerun()
 
-Write the FULL script including:
-- Intro music cue and host intro
-- Opening hook (first 30 seconds must grab attention)
-- Full episode content with natural speech patterns, [PAUSE] markers, [EMPHASIS] markers
-- Smooth transitions between segments
-- {"Sponsor read (60 seconds)" if pod_sponsor else ""}
-- Strong outro with CTA
-- Outro music cue
+    if ideas:
+        # Sort by priority then votes
+        priority_order = {"🚀 Build Next":0,"🔥 High":1,"⚡ Medium":2,"💡 Low":3}
+        ideas_sorted = sorted(ideas, key=lambda x: (priority_order.get(x.get("priority","💡 Low"),3), -x.get("votes",0)))
 
-Write it exactly as it would be spoken. Include stage directions in [brackets]."""
-
-            with st.spinner("Writing your podcast script..."):
-                result, engine = ai_call(prompt, system=f"You are an expert podcast scriptwriter. Write natural, engaging scripts that sound great when spoken aloud.", max_tokens=2500)
-
-            if result:
-                st.success(f"✅ Script generated via {engine}!")
-                st.text_area("Your Podcast Script:", value=result, height=450)
-                st.download_button("⬇️ Download Script", data=result,
-                                   file_name=f"podcast_{pod_title[:30].replace(' ','_')}.txt", mime="text/plain")
-                st.markdown("---")
-                st.markdown("""<div class='card card-b'>
-<strong>🔊 Turn Script into Audio:</strong><br>
-<strong>Option 1 — ElevenLabs (Best Quality):</strong> Copy script → elevenlabs.io → choose voice → generate → download MP3<br>
-<strong>Option 2 — LM Studio TTS:</strong> If your LM Studio has a TTS model loaded, use it locally for free<br>
-<strong>Option 3 — Free:</strong> ttsmaker.com or ttsfree.com — paste script, download MP3
-</div>""", unsafe_allow_html=True)
-            else: st.warning("No AI engine — start LM Studio or add OpenAI key in Settings.")
-        else: st.warning("Enter a topic first.")
+        for idea in ideas_sorted:
+            with st.expander(f"{idea.get('priority','💡')} [{idea.get('category','?')}] {idea.get('idea','')[:70]} · 👍 {idea.get('votes',0)}"):
+                ic1, ic2, ic3, ic4 = st.columns([3,1,1,1])
+                with ic1:
+                    st.markdown(f"<p style='color:#e0e0e0;'>{idea.get('idea','')}</p>", unsafe_allow_html=True)
+                    if idea.get("ai_eval"):
+                        st.markdown(f"<p style='color:#888;font-size:.8em;'>AI: {idea['ai_eval']}</p>", unsafe_allow_html=True)
+                with ic2:
+                    if st.button("👍 Vote", key=f"vote_{idea['id']}"):
+                        idea["votes"] = idea.get("votes",0) + 1
+                        jsave(IDEAS_FILE, ideas); st.rerun()
+                with ic3:
+                    if st.button("🤖 Evaluate", key=f"eval_{idea['id']}"):
+                        p = f"Evaluate this business idea in 2 sentences — is it worth building? What's the revenue potential? Idea: {idea['idea']}"
+                        with st.spinner("Evaluating..."):
+                            ev, _ = ai_call(p, max_tokens=150)
+                        if ev:
+                            idea["ai_eval"] = ev
+                            jsave(IDEAS_FILE, ideas); st.rerun()
+                with ic4:
+                    if st.button("🗑️ Delete", key=f"del_idea_{idea['id']}"):
+                        ideas = [i for i in ideas if i["id"] != idea["id"]]
+                        jsave(IDEAS_FILE, ideas); st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 9 — WEB TOOLS
+# TAB 9 — DREAM BUILD ENQUIRY
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[9]:
-    st.markdown("## 🌐 Web Tools")
-    wt1, wt2, wt3 = st.tabs(["🌐 Web Redesigner","📱 Mini App Cloner","🚀 Landing Page Builder"])
+    st.markdown("## 🚀 Dream Build — Custom Dashboard Enquiry")
+    st.markdown("""<div class='card' style='border:1px solid #ff006e;'>
+<h4 style='color:#ff006e;'>Want a custom dashboard built for your business?</h4>
+<p style='color:#888;font-size:.85em;'>Tell us what you need. We'll build it. Fully custom, fully yours. Starting from $500 setup + $97/mo.</p>
+</div>""", unsafe_allow_html=True)
 
-    with wt1:
-        st.markdown("### 🌐 AI Web Redesigner (Pimly-Style)")
-        st.markdown("<p style='color:#555;font-size:.85em;'>Paste any URL — AI analyses the site and rebuilds it as a clean, modern, deployable HTML page. Works on all URLs.</p>", unsafe_allow_html=True)
-        wr_url = st.text_input("Website URL:", placeholder="https://anywebsite.com")
-        wr_style = st.selectbox("Redesign Style:", ["Modern Dark (like this dashboard)","Clean White Minimal","Bold Corporate","Startup Landing Page","Australian Trade Business","E-commerce"])
-        wr_notes = st.text_input("Specific instructions:", placeholder="e.g. Keep the same content but make it look premium, add a contact form")
-        if st.button("🎨 Redesign Website", use_container_width=True, type="primary"):
-            if wr_url.strip():
-                site_content = ""
-                if online:
-                    try:
-                        r = requests.get(wr_url, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
-                        soup = BeautifulSoup(r.text, "html.parser")
-                        for tag in soup(["script","style","nav","footer","header"]): tag.decompose()
-                        site_content = soup.get_text(separator="\n", strip=True)[:3000]
-                    except: site_content = ""
-                site_section = ("Site content:\n" + site_content) if site_content else "No content available — create a professional redesign based on the URL."
-                prompt = f"""Redesign this website as a complete, single-file HTML page.
-URL: {wr_url}
-Style: {wr_style}
-Instructions: {wr_notes}
-{site_section}
+    enquiries = jload(ENQUIRIES_FILE, [])
 
-Output: Complete HTML file with embedded CSS. Modern, responsive, professional. Include all sections from the original. Make it look stunning."""
-                with st.spinner("Redesigning..."):
-                    result, engine = ai_call(prompt, system="You are an expert web designer. Output complete, production-ready HTML/CSS. No explanations, just the code.", max_tokens=3000)
-                if result:
-                    html_code = result
-                    if "```html" in html_code: html_code = html_code.split("```html")[1].split("```")[0]
-                    elif "```" in html_code: html_code = html_code.split("```")[1].split("```")[0]
-                    st.success(f"✅ Redesigned via {engine}!")
-                    st.download_button("⬇️ Download HTML", data=html_code, file_name="redesigned_site.html", mime="text/html")
-                    with st.expander("View HTML Code"): st.code(html_code, language="html")
-                    st.components.v1.html(html_code, height=500, scrolling=True)
-                else: st.warning("No AI engine available.")
-            else: st.warning("Enter a URL first.")
+    with st.form("dream_build_form"):
+        dbc1, dbc2 = st.columns(2)
+        with dbc1:
+            db_name    = st.text_input("Your name:", key="db_name")
+            db_email   = st.text_input("Email:", key="db_email")
+            db_phone   = st.text_input("Phone:", key="db_phone")
+            db_biz     = st.text_input("Business name:", key="db_biz")
+        with dbc2:
+            db_industry= st.selectbox("Industry:", ["Mining","Insurance","Mortgage","Medical","Tradie","Retail","Hospitality","Tech","Other"], key="db_industry")
+            db_size    = st.selectbox("Team size:", ["Just me","2-5","6-20","21-50","50+"], key="db_size")
+            db_budget  = st.selectbox("Monthly budget:", ["Under $100","$100-$300","$300-$500","$500+","Not sure yet"], key="db_budget")
+            db_tier    = st.selectbox("Tier interest:", ["Starter (Tasklet Agents)","Pro (Autonomous Crew)","Enterprise (Full Custom)","Not sure"], key="db_tier")
+        db_dream = st.text_area("Describe your dream dashboard — what would it do for your business?",
+                                height=120, placeholder="e.g. I want a dashboard that manages my 3 staff, sends automated follow-up emails to leads, tracks my monthly revenue, and has an AI that writes my social media posts...", key="db_dream")
+        db_problems = st.text_area("What problems are you trying to solve?", height=80, key="db_problems")
+        if st.form_submit_button("🚀 SUBMIT DREAM BUILD ENQUIRY", use_container_width=True):
+            enq = {"id":len(enquiries)+1,"name":db_name,"email":db_email,"phone":db_phone,"business":db_biz,"industry":db_industry,"size":db_size,"budget":db_budget,"tier":db_tier,"dream":db_dream,"problems":db_problems,"date":now.strftime("%Y-%m-%d %H:%M"),"status":"New"}
+            enquiries.append(enq)
+            jsave(ENQUIRIES_FILE, enquiries)
+            # Auto-add to leads
+            leads = jload(LEADS_FILE, [])
+            leads.append({"name":db_name,"email":db_email,"phone":db_phone,"industry":db_industry,"status":"Hot","notes":f"Dream Build enquiry — {db_tier}","date":now.strftime("%Y-%m-%d")})
+            jsave(LEADS_FILE, leads)
+            st.success(f"✅ Enquiry received! We'll be in touch within 24 hours, {db_name}.")
+            # Generate personalised follow-up
+            p = f"Write a personalised follow-up email to {db_name} from {db_biz} who enquired about a custom AI dashboard. Their dream: {db_dream}. Budget: {db_budget}. Tier: {db_tier}. From ArmourVault.au / ARTIFICIAL & INTELLIGENT. Warm, professional, excited. Under 200 words."
+            with st.spinner("Generating follow-up email..."):
+                fe, _ = ai_call(p, max_tokens=400)
+            if fe:
+                st.text_area("Auto-generated follow-up email:", value=fe, height=200, key="db_followup")
 
-    with wt2:
-        st.markdown("### 📱 Mini App Cloner")
-        st.markdown("<p style='color:#555;font-size:.85em;'>Paste a URL or describe an app — AI builds a functional single-file HTML version you can use immediately.</p>", unsafe_allow_html=True)
-        clone_url = st.text_input("App URL to clone:", placeholder="https://app.example.com")
-        clone_desc = st.text_area("Or describe what to build:", height=80, placeholder="e.g. A simple invoice calculator where I enter items and it totals them up with GST")
-        clone_type = st.selectbox("App type:", ["Invoice Calculator","Quote Generator","Lead Capture Form","Contact Form","Booking Form","Price Calculator","ROI Calculator","Checklist App","Timer/Tracker","Custom"])
-        if st.button("🔨 Build App", use_container_width=True, type="primary"):
-            target = clone_url or clone_desc
-            if target.strip():
-                prompt = f"""Build a complete, functional single-file HTML app:
-Target: {target}
-Type: {clone_type}
-Requirements: Fully functional, no external dependencies, embedded CSS (dark theme), embedded JavaScript, mobile-responsive, professional UI.
-Output: Complete HTML file only. No explanations."""
-                with st.spinner("Building your app..."):
-                    result, engine = ai_call(prompt, system="You are an expert frontend developer. Build complete, functional HTML apps with embedded CSS and JavaScript.", max_tokens=3000)
-                if result:
-                    html_code = result
-                    if "```html" in html_code: html_code = html_code.split("```html")[1].split("```")[0]
-                    elif "```" in html_code: html_code = html_code.split("```")[1].split("```")[0]
-                    st.success(f"✅ App built via {engine}!")
-                    st.download_button("⬇️ Download App", data=html_code, file_name=f"{clone_type.lower().replace(' ','_')}_app.html", mime="text/html")
-                    st.components.v1.html(html_code, height=400, scrolling=True)
-                else: st.warning("No AI engine available.")
-            else: st.warning("Enter a URL or description.")
-
-    with wt3:
-        st.markdown("### 🚀 AI Landing Page Builder")
-        lp_product = st.text_input("Product/Service name:", placeholder="e.g. Email Assassin", key="lp_product")
-        lp_tagline = st.text_input("Tagline:", placeholder="e.g. AI-powered email responses in 10 seconds", key="lp_tagline")
-        lp_price   = st.text_input("Price:", placeholder="e.g. $97/month", key="lp_price")
-        lp_audience= st.text_input("Target audience:", placeholder="e.g. Small business owners who hate writing emails", key="lp_audience")
-        lp_benefits= st.text_area("Key benefits (one per line):", height=90, placeholder="Saves 10 hours per week\nNever miss a lead again\nProfessional replies every time")
-        lp_cta     = st.text_input("CTA button text:", "Start Free Trial", key="lp_cta")
-        lp_style   = st.selectbox("Style:", ["Dark & Premium","Clean White","Bold & Energetic","Minimal SaaS","Australian Trade"])
-        if st.button("🚀 Build Landing Page", use_container_width=True, type="primary"):
-            if lp_product.strip():
-                prompt = f"""Build a complete, conversion-optimised landing page:
-Product: {lp_product} | Tagline: {lp_tagline} | Price: {lp_price} | Audience: {lp_audience}
-Benefits: {lp_benefits} | CTA: {lp_cta} | Style: {lp_style}
-
-Include: Hero section, problem/solution, benefits, social proof section, pricing, FAQ, strong CTA footer.
-Output: Complete single-file HTML with embedded CSS. No external dependencies. Mobile responsive."""
-                with st.spinner("Building landing page..."):
-                    result, engine = ai_call(prompt, system="You are an expert conversion copywriter and web designer. Build landing pages that convert.", max_tokens=3000)
-                if result:
-                    html_code = result
-                    if "```html" in html_code: html_code = html_code.split("```html")[1].split("```")[0]
-                    elif "```" in html_code: html_code = html_code.split("```")[1].split("```")[0]
-                    st.success(f"✅ Landing page built via {engine}!")
-                    st.download_button("⬇️ Download Page", data=html_code, file_name=f"{lp_product.lower().replace(' ','_')}_landing.html", mime="text/html")
-                    st.components.v1.html(html_code, height=500, scrolling=True)
-                else: st.warning("No AI engine available.")
-            else: st.warning("Enter a product name.")
+    if enquiries:
+        st.markdown(f"---\n### 📋 Enquiries ({len(enquiries)} total)")
+        for enq in reversed(enquiries):
+            with st.expander(f"#{enq['id']} — {enq.get('name','')} | {enq.get('business','')} | {enq.get('tier','')} | {enq.get('date','')}"):
+                st.markdown(f"**Email:** {enq.get('email','')} | **Phone:** {enq.get('phone','')} | **Budget:** {enq.get('budget','')}")
+                st.markdown(f"**Dream:** {enq.get('dream','')}")
+                st.markdown(f"**Problems:** {enq.get('problems','')}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 10 — BUSINESS TOOLS
+# TAB 10 — PRODUCTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[10]:
-    st.markdown("## 🚀 AI Business Tools")
-    bt1,bt2,bt3,bt4,bt5,bt6,bt7,bt8,bt9 = st.tabs([
-        "💰 Quick Quote","📄 Proposal","🧾 Invoice","🎯 Ad Copy",
-        "📅 Content Calendar","🕵️ Competitor Spy","💡 Sales Script","🏷️ Business Name","👥 Client Tracker"])
+    st.markdown("## 📦 Products & Services")
+    products = jload(PRODUCTS_FILE, [])
+    if not products:
+        products = [
+            {"name":"AI Content Machine","price":297,"status":"Active","customers":0,"desc":"AI-powered content creation suite"},
+            {"name":"Email Automation Suite","price":197,"status":"Active","customers":0,"desc":"20 templates + AI writer + drip sequences"},
+            {"name":"Avatar Empire Builder","price":497,"status":"Active","customers":0,"desc":"Full autonomous avatar creation system"},
+            {"name":"Lead Scraper Pro","price":147,"status":"Active","customers":0,"desc":"Email scraper + CRM + enrichment"},
+            {"name":"Social Command Centre","price":247,"status":"Active","customers":0,"desc":"All 6 platforms, content calendar, DM writer"},
+            {"name":"Security Dashboard","price":197,"status":"Active","customers":0,"desc":"SOCI compliance, threat advisor, client reports"},
+            {"name":"TradieTech Starter","price":14950,"status":"Active","customers":0,"desc":"Tier 1 cybersecurity system (up to 4 cams)"},
+            {"name":"TradieTech Pro","price":24950,"status":"Active","customers":0,"desc":"Tier 2 cybersecurity system (5-12 cams)"},
+            {"name":"TradieTech Enterprise","price":39950,"status":"Active","customers":0,"desc":"Tier 3 cybersecurity system (13+ cams)"},
+            {"name":"AI Business Dashboard — Starter","price":97,"status":"Active","customers":0,"desc":"Tasklet agents, core tools, monthly"},
+            {"name":"AI Business Dashboard — Pro","price":297,"status":"Active","customers":0,"desc":"Autonomous crew, all tools, monthly"},
+            {"name":"Custom Dashboard Build","price":500,"status":"Active","customers":0,"desc":"Custom setup fee + monthly subscription"},
+            {"name":"Magic Mike Avatar System","price":997,"status":"Active","customers":0,"desc":"Full autonomous avatar + video pipeline"},
+        ]
+        jsave(PRODUCTS_FILE, products)
 
-    with bt1:
-        st.markdown("### 💰 Quick Quote Generator (3-Tier System)")
-        st.markdown("<p style='color:#555;font-size:.85em;'>Based on staff count + cameras. Generates professional quote instantly.</p>", unsafe_allow_html=True)
-        c1,c2,c3 = st.columns(3)
-        with c1: qq_business = st.text_input("Business name:")
-        with c2: qq_staff    = st.number_input("Staff count:", 1, 500, 10)
-        with c3: qq_cameras  = st.number_input("Camera heads:", 0, 200, 8)
-        qq_industry = st.selectbox("Industry:", ["Mining","Insurance Broker","Mortgage Broker","Medical Centre","Tradie/Construction","Retail","Hospitality","NDIS Provider","Other"])
-        tier = "Small" if qq_cameras <= 8 else "Medium" if qq_cameras <= 20 else "Large"
-        base_prices = {"Small": 14950, "Medium": 24950, "Large": 49950}
-        monthly_fees = {"Small": 1000, "Medium": 1500, "Large": 2500}
-        base = base_prices[tier]; monthly = monthly_fees[tier]
-        st.markdown(f"""<div class='card card-g'>
-<strong>Tier: {tier}</strong> | Cameras: {qq_cameras} | Staff: {qq_staff}<br>
-<span style='color:#00ff41;font-size:1.3em;font-weight:900;'>${base:,} upfront + ${monthly:,}/month</span><br>
-<span style='color:#555;font-size:.8em;'>3-year contract | Free replacement at 3yr 3mo mark | Australian Gov. spec compliance</span>
-</div>""", unsafe_allow_html=True)
-        if st.button("📄 Generate Full Quote Document", use_container_width=True):
-            result, engine = ai_call(
-                f"Write a professional quote document for {qq_business or 'the client'} ({qq_industry}, {qq_staff} staff, {qq_cameras} cameras). Tier: {tier}. Upfront: ${base:,}. Monthly: ${monthly:,}. Include: scope of work, what's included, timeline, payment terms, 3yr 3mo free replacement clause, warranty, next steps.",
-                system="You are a professional business proposal writer.", max_tokens=700)
-            if result: st.text_area("Quote:", value=result, height=300)
+    total_products = len(products)
+    active_products = len([p for p in products if p.get("status")=="Active"])
+    total_customers = sum(p.get("customers",0) for p in products)
+    pc1,pc2,pc3 = st.columns(3)
+    with pc1: st.metric("Total Products", total_products)
+    with pc2: st.metric("Active", active_products)
+    with pc3: st.metric("Total Customers", total_customers)
 
-    with bt2:
-        st.markdown("### 📄 AI Proposal Machine")
-        c1,c2 = st.columns(2)
-        with c1:
-            prop_client  = st.text_input("Client name:")
-            prop_problem = st.text_area("Their problem:", height=70, placeholder="e.g. Spending 3 hours/day on email responses, missing leads")
-        with c2:
-            prop_solution= st.text_input("Your solution:", placeholder="e.g. Email Assassin — AI auto-reply tool", key="prop_solution")
-            prop_price   = st.text_input("Investment:", placeholder="e.g. $297/month", key="prop_price")
-        prop_extras = st.text_input("Any extras to include:", placeholder="e.g. 30-day money back, free onboarding call, 3 months support", key="prop_extras")
-        if st.button("📄 Generate Proposal", use_container_width=True, type="primary"):
-            if prop_client.strip():
-                result, engine = ai_call(
-                    f"Write a complete, professional business proposal for {prop_client}.\nProblem: {prop_problem}\nSolution: {prop_solution}\nInvestment: {prop_price}\nExtras: {prop_extras}\n\nInclude: Executive summary, problem statement, proposed solution, deliverables, timeline, investment breakdown, ROI justification, terms, next steps. Professional Australian business tone.",
-                    system="You are an expert business proposal writer.", max_tokens=1200)
-                if result:
-                    st.text_area("Proposal:", value=result, height=400)
-                    st.download_button("⬇️ Download", data=result, file_name=f"proposal_{prop_client}.txt", mime="text/plain")
-                else: st.warning("No AI engine available.")
-
-    with bt3:
-        st.markdown("### 🧾 Invoice Builder")
-        c1,c2 = st.columns(2)
-        with c1:
-            inv_to      = st.text_input("Invoice to:")
-            inv_from    = st.text_input("From:", "Avatar Empire")
-            inv_date    = st.text_input("Date:", now.strftime("%d/%m/%Y"))
-            inv_due     = st.text_input("Due date:", "14 days")
-        with c2:
-            inv_num     = st.text_input("Invoice #:", f"INV-{now.strftime('%Y%m%d')}-001")
-            inv_abn     = st.text_input("ABN:", placeholder="12 345 678 901")
-        inv_items = st.text_area("Line items (one per line: Description | Qty | Price):", height=100,
-                                  placeholder="AI Email Assassin — Monthly Subscription | 1 | 297\nOnboarding Call | 1 | 0")
-        if st.button("🧾 Generate Invoice", use_container_width=True, type="primary"):
-            lines = [l.strip() for l in inv_items.split("\n") if "|" in l]
-            items_parsed = []
-            subtotal = 0
-            for line in lines:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 3:
-                    try:
-                        qty = float(parts[1]); price = float(parts[2].replace("$","").replace(",",""))
-                        items_parsed.append({"desc":parts[0],"qty":qty,"price":price,"total":qty*price})
-                        subtotal += qty * price
-                    except: pass
-            gst = subtotal * 0.1; total = subtotal + gst
-            inv_html = f"""<!DOCTYPE html><html><head><style>
-body{{font-family:Arial,sans-serif;max-width:800px;margin:40px auto;color:#333;}}
-.header{{display:flex;justify-content:space-between;margin-bottom:30px;}}
-h1{{color:#000;font-size:2em;}} .label{{color:#888;font-size:.85em;}}
-table{{width:100%;border-collapse:collapse;margin:20px 0;}}
-th{{background:#000;color:#fff;padding:10px;text-align:left;}}
-td{{padding:10px;border-bottom:1px solid #eee;}}
-.total-row{{font-weight:bold;background:#f9f9f9;}}
-.grand-total{{font-size:1.3em;color:#000;background:#000;color:#fff;}}
-</style></head><body>
-<div class="header"><div><h1>INVOICE</h1><p class="label">Invoice #: {inv_num}</p><p class="label">Date: {inv_date}</p><p class="label">Due: {inv_due}</p></div>
-<div style="text-align:right"><strong>{inv_from}</strong><br>ABN: {inv_abn}</div></div>
-<p><strong>Bill To:</strong> {inv_to}</p>
-<table><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr>
-{"".join(f"<tr><td>{i['desc']}</td><td>{i['qty']}</td><td>${i['price']:,.2f}</td><td>${i['total']:,.2f}</td></tr>" for i in items_parsed)}
-<tr class="total-row"><td colspan="3">Subtotal</td><td>${subtotal:,.2f}</td></tr>
-<tr class="total-row"><td colspan="3">GST (10%)</td><td>${gst:,.2f}</td></tr>
-<tr class="grand-total"><td colspan="3"><strong>TOTAL</strong></td><td><strong>${total:,.2f}</strong></td></tr>
-</table>
-<p style="color:#888;font-size:.85em;">Payment due within {inv_due}. Bank transfer preferred. Thank you for your business.</p>
-</body></html>"""
-            st.success(f"Invoice total: ${total:,.2f} (inc. GST)")
-            st.download_button("⬇️ Download Invoice HTML", data=inv_html, file_name=f"{inv_num}.html", mime="text/html")
-            st.components.v1.html(inv_html, height=400, scrolling=True)
-
-    with bt4:
-        st.markdown("### 🎯 AI Ad Copy Generator")
-        c1,c2 = st.columns(2)
-        with c1:
-            ad_product  = st.text_input("Product:", placeholder="e.g. Email Assassin", key="ad_product")
-            ad_audience = st.text_input("Audience:", placeholder="e.g. Small business owners", key="ad_audience")
-            ad_pain     = st.text_input("Pain point:", placeholder="e.g. Spending hours on email", key="ad_pain")
-        with c2:
-            ad_platform = st.selectbox("Platform:", ["Facebook/Instagram","Google Ads","LinkedIn","TikTok","YouTube Pre-roll","Twitter/X"])
-            ad_cta      = st.text_input("CTA:", "Try Free for 7 Days", key="ad_cta")
-            ad_budget   = st.selectbox("Ad type:", ["Single Image Ad","Video Script (30s)","Carousel (3 slides)","Story Ad","Search Ad (Google)"])
-        if st.button("🎯 Generate Ad Copy", use_container_width=True, type="primary"):
-            if ad_product.strip():
-                result, engine = ai_call(
-                    f"Write {ad_budget} ad copy for {ad_platform}:\nProduct: {ad_product}\nAudience: {ad_audience}\nPain point: {ad_pain}\nCTA: {ad_cta}\n\nWrite multiple variations (3 headlines, 3 body copy options). Include character counts for each. Platform-optimised.",
-                    system="You are an expert paid advertising copywriter.", max_tokens=700)
-                if result: st.text_area("Ad copy:", value=result, height=300)
-                else: st.warning("No AI engine available.")
-
-    with bt5:
-        st.markdown("### 📅 30-Day Content Calendar Builder")
-        c1,c2 = st.columns(2)
-        with c1:
-            cc_niche    = st.text_input("Niche:", placeholder="e.g. AI tools for tradies")
-            cc_platforms= st.multiselect("Platforms:", ["TikTok","Instagram","YouTube","LinkedIn","Twitter/X","Blog"], default=["TikTok","Instagram"])
-        with c2:
-            cc_goal     = st.selectbox("Goal:", ["Build audience","Drive sales","Brand awareness","Lead generation","Community building"])
-            cc_month    = st.text_input("Month:", now.strftime("%B %Y"))
-        if st.button("📅 Build 30-Day Calendar", use_container_width=True, type="primary"):
-            if cc_niche.strip():
-                result, engine = ai_call(
-                    f"Create a complete 30-day content calendar for {cc_month}:\nNiche: {cc_niche}\nPlatforms: {', '.join(cc_platforms)}\nGoal: {cc_goal}\n\nFor each day: Day number, platform, content type, topic/hook, caption idea. Format as a clean table or numbered list. Include mix of educational, entertaining, promotional (80/20 rule).",
-                    system="You are an expert social media strategist.", max_tokens=2500)
-                if result:
-                    st.text_area("Your calendar:", value=result, height=400)
-                    st.download_button("⬇️ Download Calendar", data=result, file_name=f"content_calendar_{cc_month.replace(' ','_')}.txt", mime="text/plain")
-                else: st.warning("No AI engine available.")
-
-    with bt6:
-        st.markdown("### 🕵️ Competitor Spy Tool")
-        comp_url  = st.text_input("Competitor URL:", placeholder="https://competitor.com")
-        comp_notes= st.text_input("What you know about them:", placeholder="e.g. They charge $500/month, target enterprise")
-        if st.button("🕵️ Analyse Competitor", use_container_width=True, type="primary"):
-            comp_content = ""
-            if online and comp_url.strip():
-                try:
-                    r = requests.get(comp_url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
-                    soup = BeautifulSoup(r.text, "html.parser")
-                    comp_content = soup.get_text(separator=" ", strip=True)[:2500]
-                except: pass
-            result, engine = ai_call(
-                f"Analyse this competitor and give me a strategic breakdown:\nURL: {comp_url}\nAdditional info: {comp_notes}\n{'Content: '+comp_content if comp_content else ''}\n\nProvide:\n1. Their positioning and target market\n2. Pricing strategy\n3. Key strengths\n4. Weaknesses and gaps\n5. How to beat them (3 specific tactics)\n6. Messaging to steal their customers\n7. Pricing recommendation to undercut/outvalue",
-                system="You are a ruthless competitive intelligence analyst.", max_tokens=900)
-            if result: st.text_area("Competitor analysis:", value=result, height=350)
-            else: st.warning("No AI engine available.")
-
-    with bt7:
-        st.markdown("### 💡 AI Sales Script Generator")
-        c1,c2 = st.columns(2)
-        with c1:
-            ss_product   = st.text_input("Product:", placeholder="e.g. Email Assassin", key="ss_product")
-            ss_price     = st.text_input("Price:", placeholder="e.g. $297/month", key="ss_price")
-            ss_audience  = st.text_input("Prospect type:", placeholder="e.g. Busy tradie business owner", key="ss_audience")
-        with c2:
-            ss_objection = st.selectbox("Main objection:", ["Too expensive","Need to think about it","Not sure I need it","Already have something","No time to implement","Not tech savvy"])
-            ss_format    = st.selectbox("Format:", ["Cold Call Script","Discovery Call","Demo Close","Objection Handler","Text/DM Script","Video Sales Letter"])
-        if st.button("💡 Generate Script", use_container_width=True, type="primary"):
-            if ss_product.strip():
-                result, engine = ai_call(
-                    f"Write a complete word-for-word {ss_format} for:\nProduct: {ss_product} at {ss_price}\nProspect: {ss_audience}\nMain objection to handle: {ss_objection}\n\nInclude: Opening, rapport building, discovery questions, pitch, objection handling, close, follow-up. Write every word they should say.",
-                    system="You are a world-class sales trainer. Write scripts that close deals.", max_tokens=900)
-                if result: st.text_area("Sales script:", value=result, height=350)
-                else: st.warning("No AI engine available.")
-
-    with bt8:
-        st.markdown("### 🏷️ Business Name & Tagline Generator")
-        bn_desc    = st.text_area("Describe the business:", height=70, placeholder="e.g. AI tools for Australian tradies — quotes, invoices, scheduling, automated")
-        bn_style   = st.selectbox("Name style:", ["Professional & Corporate","Punchy & Memorable","Tech/Modern","Australian","Descriptive","Abstract/Creative"])
-        if st.button("🏷️ Generate Names", use_container_width=True, type="primary"):
-            if bn_desc.strip():
-                result, engine = ai_call(
-                    f"Generate 10 business names + taglines for: {bn_desc}\nStyle: {bn_style}\n\nFor each: Name, tagline (under 10 words), domain availability tip, why it works. Make them memorable and brandable.",
-                    system="You are a brand naming expert.", max_tokens=700)
-                if result: st.text_area("Names & taglines:", value=result, height=350)
-                else: st.warning("No AI engine available.")
-
-    with bt9:
-        st.markdown("### 👥 Client Follow-Up Tracker")
-        with st.form("add_client"):
-            c1,c2,c3 = st.columns(3)
-            with c1: cl_name = st.text_input("Client name:")
-            with c2: cl_email = st.text_input("Email:")
-            with c3: cl_followup = st.text_input("Follow-up date:", now.strftime("%Y-%m-%d"))
-            cl_notes = st.text_input("Notes:", placeholder="e.g. Interested in Email Assassin, needs demo")
-            cl_value = st.number_input("Deal value ($):", 0, value=0)
-            if st.form_submit_button("➕ Add Client"):
-                clients.append({"name":cl_name,"email":cl_email,"followup":cl_followup,"notes":cl_notes,
-                                 "value":cl_value,"status":"Active","added":now.strftime("%Y-%m-%d")})
-                jsave(CLIF, clients); st.success(f"{cl_name} added!"); st.rerun()
-
-        st.markdown(f"### 👥 Client List ({len(clients)} clients)")
-        overdue = [c for c in clients if c.get("followup","") < now.strftime("%Y-%m-%d") and c.get("status")=="Active"]
-        if overdue:
-            st.markdown(f'<span class="pill-off">⚠️ {len(overdue)} overdue follow-ups!</span>', unsafe_allow_html=True)
-        for i, client in enumerate(reversed(clients[-20:])):
-            is_overdue = client.get("followup","") < now.strftime("%Y-%m-%d") and client.get("status")=="Active"
-            border = "card-p" if is_overdue else "card-g"
-            st.markdown(f"""<div class='card {border}'>
-<strong>{client['name']}</strong> {f"<span style='color:#888;font-size:.8em;'>{client['email']}</span>" if client.get('email') else ""}
-{f"<span style='color:#ffd700;font-size:.8em;'>💰 ${client['value']:,}</span>" if client.get('value') else ""}
-{f"<span style='color:#ff4444;font-size:.8em;'> ⚠️ OVERDUE</span>" if is_overdue else ""}
-<br><span style='color:#555;font-size:.8em;'>Follow-up: {client.get('followup','')} | {client.get('notes','')[:60]}</span>
-</div>""", unsafe_allow_html=True)
+    for p in products:
+        with st.expander(f"📦 {p['name']} — ${p['price']:,} | {p.get('status','Active')} | {p.get('customers',0)} customers"):
+            prc1, prc2, prc3 = st.columns(3)
+            with prc1: st.markdown(f"<span class='pill-ai'>${p['price']:,}</span>", unsafe_allow_html=True)
+            with prc2: st.markdown(f"<span class='pill-on'>{p.get('status','Active')}</span>", unsafe_allow_html=True)
+            with prc3: st.markdown(f"<span class='pill-pink'>{p.get('customers',0)} customers</span>", unsafe_allow_html=True)
+            st.markdown(f"<p style='color:#888;font-size:.85em;'>{p.get('desc','')}</p>", unsafe_allow_html=True)
+            if st.button(f"🚀 Launch Campaign", key=f"launch_{p['name'][:15]}"):
+                lp = f"Write a product launch campaign for: {p['name']} at ${p['price']:,}. Include: Launch email, 3 social posts (FB, IG, LinkedIn), key selling points, urgency/scarcity angle. ArmourVault.au / ARTIFICIAL & INTELLIGENT branding."
+                with st.spinner("Building launch campaign..."):
+                    lr, le = ai_call(lp, max_tokens=1000)
+                if lr: st.text_area("Launch Campaign:", value=lr, height=300, key=f"lc_{p['name'][:10]}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 11 — TASK SHEET
+# TAB 11 — REVENUE
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[11]:
-    st.markdown("## 📋 Daily Task Sheet")
-    col1, col2 = st.columns([2, 1])
+    st.markdown("## 💰 Revenue Dashboard")
+    revenue_data = jload(REVENUE_FILE, [])
 
-    with col1:
-        st.markdown(f"### {now.strftime('%A %d %B %Y')}")
-        cats = ["All"] + sorted(set(t.get("category","General") for t in tasksheet))
-        cat_filter = st.selectbox("Category:", cats)
-        filtered_tasks = tasksheet if cat_filter == "All" else [t for t in tasksheet if t.get("category") == cat_filter]
-        pending = [t for t in filtered_tasks if not t.get("done")]
-        done = [t for t in filtered_tasks if t.get("done")]
-        st.markdown(f"**{len(pending)} pending · {len(done)} done today**")
+    mrr = sum(r.get("amount",0) for r in revenue_data if r.get("type")=="monthly")
+    total_rev = sum(r.get("amount",0) for r in revenue_data)
+    arr = mrr * 12
 
-        for i, task in enumerate(pending):
-            real_idx = tasksheet.index(task) if task in tasksheet else -1
-            c1,c2,c3 = st.columns([3,1,1])
-            with c1:
-                pri_color = {"🔴 High":"#ff4444","🟡 Medium":"#ffd700","🟢 Low":"#00ff41"}.get(task.get("priority","🟢 Low"),"#555")
-                st.markdown(f"<span style='color:{pri_color};font-size:.75em;'>{task.get('priority','')}</span> {task.get('task','')}", unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"<span style='color:#333;font-size:.75em;'>{task.get('category','')}</span>", unsafe_allow_html=True)
-            with c3:
-                if st.button("✅", key=f"done_{i}") and real_idx >= 0:
-                    tasksheet[real_idx]["done"] = True
-                    tasksheet[real_idx]["completed"] = now.strftime("%H:%M")
-                    jsave(TASKF, tasksheet); st.rerun()
+    rc1,rc2,rc3,rc4 = st.columns(4)
+    with rc1: st.metric("MRR", f"${mrr:,}")
+    with rc2: st.metric("ARR", f"${arr:,}")
+    with rc3: st.metric("Total Revenue", f"${total_rev:,}")
+    with rc4: st.metric("Entries", len(revenue_data))
 
-        if done:
-            st.markdown(f"---\n**✅ Completed ({len(done)})**")
-            for task in done[-5:]:
-                st.markdown(f"<span style='color:#1a1a1a;text-decoration:line-through;font-size:.85em;'>✅ {task.get('task','')}</span>", unsafe_allow_html=True)
+    with st.form("log_revenue_form"):
+        rfc1, rfc2, rfc3 = st.columns(3)
+        with rfc1:
+            r_source = st.text_input("Source:", key="r_source")
+            r_amount = st.number_input("Amount ($):", min_value=0.0, value=0.0, key="r_amount")
+        with rfc2:
+            r_type   = st.selectbox("Type:", ["monthly","one-off","setup","referral"], key="r_type")
+            r_product= st.text_input("Product:", key="r_product")
+        with rfc3:
+            r_notes  = st.text_input("Notes:", key="r_notes")
+        if st.form_submit_button("💰 Log Revenue", use_container_width=True):
+            revenue_data.append({"source":r_source,"amount":r_amount,"type":r_type,"product":r_product,"notes":r_notes,"date":now.strftime("%Y-%m-%d")})
+            jsave(REVENUE_FILE, revenue_data); st.rerun()
 
-        st.markdown("---")
-        with st.form("add_task_form"):
-            c1,c2,c3 = st.columns([3,1,1])
-            with c1: new_task = st.text_input("New task:", label_visibility="collapsed", placeholder="Add task...")
-            with c2: new_pri  = st.selectbox("", ["🔴 High","🟡 Medium","🟢 Low"], label_visibility="collapsed")
-            with c3: new_cat  = st.selectbox("", ["General","Sales","Content","Tech","Admin","Agent","Finance"], label_visibility="collapsed")
-            if st.form_submit_button("➕ Add"):
-                if new_task.strip():
-                    tasksheet.append({"task":new_task,"priority":new_pri,"done":False,"category":new_cat,
-                                       "date":now.strftime("%Y-%m-%d"),"added":now.strftime("%H:%M")})
-                    jsave(TASKF, tasksheet); st.rerun()
-
-        c1,c2 = st.columns(2)
-        with c1:
-            if st.button("🤖 AI Plan for Today", use_container_width=True):
-                result, engine = ai_call(
-                    f"It's {now.strftime('%A')}. AI tools business. MRR ${total_mrr:,}. {len(leads)} leads. {len(pending_tasks)} pending tasks. Give me 8 specific actions for today. Numbered list.",
-                    system="You are a sharp business coach.", max_tokens=400)
-                if result:
-                    lines = [re.sub(r'^\d+[\.\)]\s*','',l.strip()) for l in result.split("\n") if l.strip() and l.strip()[0].isdigit()]
-                    for line in lines[:8]:
-                        if line: tasksheet.append({"task":line,"priority":"🟡 Medium","done":False,"category":"AI Plan","date":now.strftime("%Y-%m-%d"),"added":now.strftime("%H:%M")})
-                    jsave(TASKF, tasksheet); st.rerun()
-        with c2:
-            if st.button("🗑️ Clear Done", use_container_width=True):
-                tasksheet = [t for t in tasksheet if not t.get("done")]; jsave(TASKF, tasksheet); st.rerun()
-
-    with col2:
-        st.markdown("### 📊 Task Stats")
-        total_t = len(tasksheet); done_t = len([t for t in tasksheet if t.get("done")])
-        st.metric("Total Tasks", total_t); st.metric("Done", done_t); st.metric("Pending", total_t - done_t)
-        if total_t > 0: st.progress(done_t / total_t)
-
-        st.markdown("### 🎯 Today's Focus")
-        high_pri = [t for t in tasksheet if t.get("priority") == "🔴 High" and not t.get("done")]
-        if high_pri:
-            for t in high_pri[:3]:
-                st.markdown(f"<span style='color:#ff4444;font-size:.85em;'>🔴 {t['task'][:40]}</span>", unsafe_allow_html=True)
-        else: st.markdown("<span style='color:#1a1a1a;font-size:.85em;'>No high priority tasks.</span>", unsafe_allow_html=True)
-
-        st.markdown("### 📋 Revenue Targets")
-        st.markdown(f"<span style='color:#555;font-size:.85em;'>Today's target:</span> <strong style='color:#00ff41;'>$500+</strong>", unsafe_allow_html=True)
-        st.markdown(f"<span style='color:#555;font-size:.85em;'>This week:</span> <strong style='color:#00ff41;'>$2,000+</strong>", unsafe_allow_html=True)
-        st.markdown(f"<span style='color:#555;font-size:.85em;'>This month:</span> <strong style='color:#00ff41;'>${max(total_mrr, 3000):,}+</strong>", unsafe_allow_html=True)
+    if revenue_data:
+        import plotly.express as px
+        df_rev = pd.DataFrame(revenue_data)
+        if "date" in df_rev.columns and "amount" in df_rev.columns:
+            df_rev["date"] = pd.to_datetime(df_rev["date"])
+            df_daily = df_rev.groupby("date")["amount"].sum().reset_index()
+            fig = px.area(df_daily, x="date", y="amount",
+                          title="Revenue Over Time",
+                          color_discrete_sequence=["#ff006e"])
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                              font_color="#e0e0e0", title_font_color="#ff006e")
+            st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(df_rev[["date","source","product","amount","type","notes"]].sort_values("date",ascending=False).head(20), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 12 — SETTINGS
+# TAB 12 — BUSINESS TOOLS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[12]:
+    st.markdown("## 🚀 Business Tools")
+    bt_tabs = st.tabs(["📄 Proposal","🧾 Invoice","📢 Ad Copy","🏷️ Business Name","📋 Onboarding","🎯 Sales Script","📊 Weekly Wins","🌐 Web Redesigner","📱 App Cloner","🚀 Landing Page"])
+
+    with bt_tabs[0]:
+        st.markdown("### 📄 Proposal Machine")
+        pr_client = st.text_input("Client name:", key="pr_client")
+        pr_problem= st.text_area("Their problem:", height=70, key="pr_problem")
+        pr_solution=st.text_area("Your solution:", height=70, key="pr_solution")
+        pr_price  = st.text_input("Investment:", key="pr_price")
+        if st.button("📄 Generate Proposal", use_container_width=True, type="primary", key="pr_gen"):
+            if pr_client.strip():
+                p = f"Write a professional business proposal for {pr_client}. Problem: {pr_problem}. Solution: {pr_solution}. Investment: {pr_price}. ArmourVault.au. Include: Executive summary, problem statement, proposed solution, deliverables, investment, timeline, next steps, guarantee. Professional Australian tone."
+                with st.spinner("Writing proposal..."):
+                    r, e = ai_call(p, max_tokens=1200)
+                if r:
+                    st.text_area("Proposal:", value=r, height=400, key="pr_result")
+                    st.download_button("⬇ Download", r, f"proposal_{pr_client[:15]}.txt", key="dl_pr")
+
+    with bt_tabs[1]:
+        st.markdown("### 🧾 Invoice Builder")
+        ic1, ic2 = st.columns(2)
+        with ic1:
+            inv_client = st.text_input("Client:", key="inv_client")
+            inv_items  = st.text_area("Items (one per line):", height=100, placeholder="Cybersecurity System Setup — $14,950\nMonthly Monitoring — $1,000", key="inv_items")
+        with ic2:
+            inv_due    = st.text_input("Due date:", value="14 days", key="inv_due")
+            inv_bsb    = st.text_input("BSB:", key="inv_bsb")
+            inv_acc    = st.text_input("Account:", key="inv_acc")
+        if st.button("🧾 Generate Invoice", use_container_width=True, type="primary", key="inv_gen"):
+            if inv_client.strip():
+                p = f"Generate a professional invoice for {inv_client}. Items: {inv_items}. Due: {inv_due}. From ArmourVault.au. Include invoice number, date, itemised list with totals, GST, payment details (BSB: {inv_bsb}, Account: {inv_acc}), payment terms."
+                with st.spinner("Building invoice..."):
+                    r, e = ai_call(p, max_tokens=600)
+                if r:
+                    st.text_area("Invoice:", value=r, height=300, key="inv_result")
+                    st.download_button("⬇ Download", r, f"invoice_{inv_client[:15]}.txt", key="dl_inv")
+
+    with bt_tabs[2]:
+        st.markdown("### 📢 Ad Copy Generator")
+        ad_product = st.text_input("Product/Service:", key="ad_product")
+        ad_audience= st.text_input("Target audience:", key="ad_audience")
+        ad_platform= st.selectbox("Platform:", ["Facebook","Instagram","Google","LinkedIn","TikTok"], key="ad_platform")
+        ad_goal    = st.selectbox("Goal:", ["Lead Generation","Sales","Brand Awareness","Event","App Install"], key="ad_goal")
+        if st.button("📢 Generate Ad Copy", use_container_width=True, type="primary", key="ad_gen"):
+            if ad_product.strip():
+                p = f"Write {ad_platform} ad copy for {ad_product}. Audience: {ad_audience}. Goal: {ad_goal}. Include: Headline (under 40 chars), Primary text (under 125 chars), Description, CTA button text. Write 3 variations. Australian market."
+                with st.spinner("Writing ads..."):
+                    r, e = ai_call(p, max_tokens=600)
+                if r: st.text_area("Ad Copy:", value=r, height=250, key="ad_result")
+
+    with bt_tabs[3]:
+        st.markdown("### 🏷️ Business Name & Tagline Generator")
+        bn_desc = st.text_area("Describe the business:", height=80, key="bn_desc")
+        bn_industry = st.selectbox("Industry:", ["Cybersecurity","AI Tools","Tradies","Finance","Health","Retail","Tech","Other"], key="bn_industry")
+        if st.button("🏷️ Generate Names", use_container_width=True, type="primary", key="bn_gen"):
+            if bn_desc.strip():
+                p = f"Generate 10 unique business names and taglines for: {bn_desc}. Industry: {bn_industry}. Australian market. Each name should be: memorable, available as a .com.au, professional, and reflect the brand. Format: Name — Tagline"
+                with st.spinner("Generating names..."):
+                    r, e = ai_call(p, max_tokens=500)
+                if r: st.text_area("Business Names:", value=r, height=250, key="bn_result")
+
+    with bt_tabs[4]:
+        st.markdown("### 📋 Onboarding Checklist Builder")
+        ob_product = st.text_input("Product/Service:", key="ob_product")
+        ob_client  = st.text_input("Client type:", key="ob_client")
+        if st.button("📋 Build Onboarding Checklist", use_container_width=True, type="primary", key="ob_gen"):
+            if ob_product.strip():
+                p = f"Build a complete client onboarding checklist for: {ob_product}. Client type: {ob_client}. Include: Pre-install steps, Day 1 actions, Week 1 actions, Month 1 milestones, ongoing touchpoints. Format as a numbered checklist with owner (client/us) and timeframe."
+                with st.spinner("Building checklist..."):
+                    r, e = ai_call(p, max_tokens=700)
+                if r: st.text_area("Onboarding Checklist:", value=r, height=300, key="ob_result")
+
+    with bt_tabs[5]:
+        st.markdown("### 🎯 Sales Script Generator")
+        ss_product  = st.text_input("Product:", key="ss_product_bt")
+        ss_objection= st.selectbox("Objection to handle:", ["Too expensive","Not the right time","Already have a solution","Need to think about it","Need to talk to my partner","What's the ROI?","How is this different?"], key="ss_obj")
+        ss_stage    = st.selectbox("Stage:", ["Cold Call Opening","Discovery","Presentation","Objection Handle","Close","Follow-Up"], key="ss_stage")
+        if st.button("🎯 Generate Script", use_container_width=True, type="primary", key="ss_gen_bt"):
+            if ss_product.strip():
+                p = f"Write a word-for-word sales script for {ss_stage} stage. Product: {ss_product}. Objection to handle: {ss_objection}. Australian business context. Natural, conversational, not pushy. Include exact words to say."
+                with st.spinner("Writing script..."):
+                    r, e = ai_call(p, max_tokens=700)
+                if r: st.text_area("Sales Script:", value=r, height=280, key="ss_result_bt")
+
+    with bt_tabs[6]:
+        st.markdown("### 📊 Weekly Wins Tracker")
+        wins = jload(DATA_DIR/"wins.json", [])
+        with st.form("add_win_form"):
+            wc1, wc2 = st.columns(2)
+            with wc1:
+                w_win  = st.text_input("This week's win:", key="w_win")
+                w_value= st.text_input("Value/impact:", key="w_value")
+            with wc2:
+                w_cat  = st.selectbox("Category:", ["Revenue","Client","Product","Marketing","Personal","Team"], key="w_cat")
+            if st.form_submit_button("🏆 Log Win", use_container_width=True):
+                wins.append({"win":w_win,"value":w_value,"category":w_cat,"date":now.strftime("%Y-%m-%d")})
+                jsave(DATA_DIR/"wins.json", wins); st.rerun()
+        if wins:
+            for w in reversed(wins[-10:]):
+                st.markdown(f"<div class='card' style='padding:8px 12px;margin:4px 0;'><span style='color:#39ff14;'>🏆</span> <b>{w.get('win','')}</b> <span style='color:#888;font-size:.8em;'>— {w.get('value','')} · {w.get('date','')}</span></div>",
+                            unsafe_allow_html=True)
+
+    with bt_tabs[7]:
+        st.markdown("### 🌐 Web Redesigner")
+        wr_url = st.text_input("Paste any website URL:", placeholder="https://competitor.com.au", key="wr_url")
+        wr_goal= st.selectbox("Redesign goal:", ["Modernise","Improve Conversions","Mobile-First","Rebrand","Simplify"], key="wr_goal")
+        if st.button("🌐 Redesign Website", use_container_width=True, type="primary", key="wr_gen"):
+            if wr_url.strip():
+                p = f"Analyse this website URL and provide a complete redesign brief: {wr_url}. Goal: {wr_goal}. Include: Current issues, new structure recommendation, copy improvements, CTA optimisation, colour/design suggestions, and a full new homepage copy draft. Be specific and actionable."
+                with st.spinner("Analysing and redesigning..."):
+                    r, e = ai_call(p, max_tokens=1200)
+                if r: st.text_area("Redesign Brief:", value=r, height=350, key="wr_result")
+
+    with bt_tabs[8]:
+        st.markdown("### 📱 Mini App Cloner")
+        mc_url  = st.text_input("App or website URL to clone concept:", key="mc_url")
+        mc_twist= st.text_input("Your twist / improvement:", placeholder="e.g. Make it for Australian tradies with a dark theme", key="mc_twist")
+        if st.button("📱 Clone & Improve", use_container_width=True, type="primary", key="mc_gen"):
+            if mc_url.strip():
+                p = f"Analyse this app/website: {mc_url}. My twist: {mc_twist}. Provide: Core features to replicate, improvements to make, tech stack recommendation, MVP feature list, monetisation model, and a full landing page copy for the new version."
+                with st.spinner("Cloning concept..."):
+                    r, e = ai_call(p, max_tokens=1000)
+                if r: st.text_area("Clone Blueprint:", value=r, height=350, key="mc_result")
+
+    with bt_tabs[9]:
+        st.markdown("### 🚀 Landing Page Builder")
+        lp_product = st.text_input("Product/Service:", key="lp_product")
+        lp_audience= st.text_input("Target audience:", key="lp_audience")
+        lp_price   = st.text_input("Price/Offer:", key="lp_price")
+        lp_cta     = st.text_input("CTA:", value="Book a Free Demo", key="lp_cta")
+        if st.button("🚀 Build Landing Page", use_container_width=True, type="primary", key="lp_gen"):
+            if lp_product.strip():
+                p = f"Write complete landing page copy for: {lp_product}. Audience: {lp_audience}. Price: {lp_price}. CTA: {lp_cta}. Include: Headline, subheadline, hero section, 3 key benefits, social proof section, features list, FAQ (5 questions), final CTA. Conversion-optimised, Australian market."
+                with st.spinner("Building landing page..."):
+                    r, e = ai_call(p, max_tokens=1200)
+                if r:
+                    st.text_area("Landing Page Copy:", value=r, height=400, key="lp_result")
+                    st.download_button("⬇ Download", r, f"landing_{lp_product[:15]}.txt", key="dl_lp")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 13 — TASK SHEET
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[13]:
+    st.markdown("## 📋 Daily Task Sheet")
+    tasks = jload(TASKS_FILE, [])
+
+    tc1, tc2 = st.columns([2,1])
+    with tc1:
+        with st.form("add_task_form"):
+            tfc1, tfc2, tfc3 = st.columns(3)
+            with tfc1:
+                t_task   = st.text_input("Task:", key="t_task")
+                t_agent  = st.selectbox("Assign to:", ["Me","Content Machine","Email Agent","Sales Bot","Analytics Brain","Deploy Master","Code Builder","Social Agent"], key="t_agent")
+            with tfc2:
+                t_priority = st.selectbox("Priority:", ["🔥 High","⚡ Medium","💡 Low"], key="t_priority")
+                t_due      = st.text_input("Due:", value="Today", key="t_due")
+            with tfc3:
+                t_cat    = st.selectbox("Category:", ["Revenue","Content","Email","Lead","Product","Admin","Security","Social"], key="t_cat")
+            if st.form_submit_button("➕ Add Task", use_container_width=True):
+                tasks.append({"id":len(tasks)+1,"task":t_task,"agent":t_agent,"priority":t_priority,"due":t_due,"category":t_cat,"done":False,"date":now.strftime("%Y-%m-%d")})
+                jsave(TASKS_FILE, tasks); st.rerun()
+
+    with tc2:
+        total_tasks = len(tasks)
+        done_tasks  = len([t for t in tasks if t.get("done")])
+        pending     = total_tasks - done_tasks
+        st.metric("Total", total_tasks)
+        st.metric("Done", done_tasks)
+        st.metric("Pending", pending)
+        if st.button("🤖 AI Morning Briefing", use_container_width=True, key="morning_brief_ts"):
+            pending_tasks = [t for t in tasks if not t.get("done")]
+            p = f"Generate a motivating morning briefing for today. Pending tasks: {len(pending_tasks)}. Top tasks: {[t['task'] for t in pending_tasks[:5]]}. Revenue MRR: ${mrr:,}. Date: {now.strftime('%A %d %B %Y')}. Be direct, energising, and focused. Under 150 words."
+            with st.spinner("Generating briefing..."):
+                br, _ = ai_call(p, max_tokens=300)
+            if br: st.text_area("Today's Briefing:", value=br, height=150, key="ts_brief")
+
+    pending_tasks = [t for t in tasks if not t.get("done")]
+    done_tasks_list = [t for t in tasks if t.get("done")]
+
+    if pending_tasks:
+        st.markdown("### ⏳ Pending")
+        for t in sorted(pending_tasks, key=lambda x: x.get("priority","⚡ Medium")):
+            tc_a, tc_b, tc_c = st.columns([4,1,1])
+            with tc_a:
+                st.markdown(f"<div style='padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:6px;border-left:3px solid #ff006e;margin:3px 0;'>{t.get('priority','')} <b>{t.get('task','')}</b> <span style='color:#888;font-size:.8em;'>→ {t.get('agent','')} · {t.get('due','')}</span></div>",
+                            unsafe_allow_html=True)
+            with tc_b:
+                if st.button("✅", key=f"done_t_{t['id']}"):
+                    t["done"] = True; jsave(TASKS_FILE, tasks); st.rerun()
+            with tc_c:
+                if st.button("🗑️", key=f"del_t_{t['id']}"):
+                    tasks = [x for x in tasks if x["id"] != t["id"]]
+                    jsave(TASKS_FILE, tasks); st.rerun()
+
+    if done_tasks_list:
+        with st.expander(f"✅ Completed ({len(done_tasks_list)})"):
+            for t in done_tasks_list:
+                st.markdown(f"<span style='color:#39ff14;'>✅</span> <s style='color:#555;'>{t.get('task','')}</s>", unsafe_allow_html=True)
+            if st.button("🗑️ Clear All Completed", key="clear_done"):
+                tasks = [t for t in tasks if not t.get("done")]
+                jsave(TASKS_FILE, tasks); st.rerun()
+
+    ts_export = "\n".join([f"[{'✅' if t.get('done') else '⬜'}] {t.get('priority','')} {t.get('task','')} → {t.get('agent','')} · Due: {t.get('due','')}" for t in tasks])
+    st.download_button("⬇ Export Task Sheet", ts_export, f"tasks_{now.strftime('%Y%m%d')}.txt", key="dl_tasks")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 14 — SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[14]:
     st.markdown("## ⚙️ Settings")
-    col1, col2 = st.columns(2)
+    set_tabs = st.tabs(["🤖 AI Engine","🔔 Notifications","🌤️ Display","🔑 API Keys","📤 Data Export"])
 
-    with col1:
-        st.markdown("### 🤖 AI Engine")
-        st.markdown('<span class="pill-ai">LM Studio → Ollama → OpenAI (auto-fallback)</span>', unsafe_allow_html=True)
-        lm_url   = st.text_input("LM Studio URL:", S.get("lm_studio_url","http://localhost:1234/v1"))
-        lm_model = st.text_input("LM Studio Model:", S.get("lm_model","Llama-3.2-1B-Instruct-Q5_K_M"))
-        ol_url   = st.text_input("Ollama URL:", S.get("ollama_url","http://localhost:11434/v1"))
-        ol_model = st.text_input("Ollama Model:", S.get("ollama_model","llama3.2:1b"))
-        oai_key  = st.text_input("OpenAI API Key (fallback):", S.get("openai_key",""), type="password")
+    with set_tabs[0]:
+        st.markdown("### 🤖 AI Engine Settings")
+        s1c1, s1c2 = st.columns(2)
+        with s1c1:
+            new_lm_url   = st.text_input("LM Studio URL:", value=S.get("lm_studio_url","http://localhost:1234/v1"), key="s_lm_url")
+            new_ollama_m = st.text_input("Ollama model:", value=S.get("ollama_model","llama3.2:1b"), key="s_ollama")
+            new_ds_key   = st.text_input("DeepSeek API key:", value=S.get("deepseek_key",""), type="password", key="s_ds")
+        with s1c2:
+            new_oai_key  = st.text_input("OpenAI API key:", value=S.get("openai_key",""), type="password", key="s_oai")
+            new_heygen   = st.text_input("HeyGen API key:", value=S.get("heygen_key",""), type="password", key="s_heygen")
+            new_did      = st.text_input("D-ID API key:", value=S.get("did_key",""), type="password", key="s_did")
+        if st.button("💾 Save AI Settings", use_container_width=True, type="primary", key="save_ai"):
+            S.update({"lm_studio_url":new_lm_url,"ollama_model":new_ollama_m,"deepseek_key":new_ds_key,"openai_key":new_oai_key,"heygen_key":new_heygen,"did_key":new_did})
+            jsave(SETTINGS_FILE, S); st.success("✅ AI settings saved")
 
-        st.markdown("### 🌤️ Weather")
-        w_city = st.text_input("City:", S.get("weather_city","Sydney"))
-        w_key  = st.text_input("OpenWeatherMap API Key (free):", S.get("weather_key",""), type="password",
-                                help="Free at openweathermap.org/api — takes 2 minutes")
-
-    with col2:
-        st.markdown("### 📱 Telegram Notifications")
-        st.markdown("""<div class='card card-b'>
-<strong>Setup (2 minutes):</strong><br>
+    with set_tabs[1]:
+        st.markdown("### 🔔 Notifications")
+        new_tg_token = st.text_input("Telegram Bot Token:", value=S.get("telegram_token",""), type="password", key="s_tg")
+        new_tg_chat  = st.text_input("Telegram Chat ID:", value=S.get("telegram_chat_id",""), key="s_tg_chat")
+        st.markdown("""<div class='card' style='font-size:.8em;color:#888;'>
+<b>How to get your Telegram Bot Token:</b><br>
 1. Open Telegram → search @BotFather<br>
-2. Send /newbot → follow steps → copy token<br>
-3. Search @userinfobot → send /start → copy your Chat ID<br>
-4. Paste both below and save
+2. Send /newbot → follow prompts<br>
+3. Copy the token and paste above<br><br>
+<b>How to get your Chat ID:</b><br>
+1. Message your bot once<br>
+2. Visit: api.telegram.org/bot[TOKEN]/getUpdates<br>
+3. Find "chat":{"id": XXXXXXX} — that's your Chat ID
 </div>""", unsafe_allow_html=True)
-        tg_token   = st.text_input("Telegram Bot Token:", S.get("telegram_token",""), type="password")
-        tg_chat_id = st.text_input("Telegram Chat ID:", S.get("telegram_chat_id",""))
-        if st.button("🔔 Test Telegram"):
-            S_test = dict(S); S_test["telegram_token"] = tg_token; S_test["telegram_chat_id"] = tg_chat_id
-            jsave(SF, S_test)
-            sent = send_telegram(f"🎭 Avatar Empire test notification!\nMRR: ${total_mrr:,} | {now.strftime('%d %b %Y %H:%M')}")
-            st.success("Sent! Check Telegram." if sent else "Failed — check token and chat ID.")
+        if st.button("💾 Save Notification Settings", use_container_width=True, type="primary", key="save_notif"):
+            S.update({"telegram_token":new_tg_token,"telegram_chat_id":new_tg_chat})
+            jsave(SETTINGS_FILE, S); st.success("✅ Notification settings saved")
+        if st.button("🔔 Test Telegram", key="test_tg"):
+            if S.get("telegram_token") and S.get("telegram_chat_id"):
+                try:
+                    import requests as req
+                    r = req.post(f"https://api.telegram.org/bot{S['telegram_token']}/sendMessage",
+                                 json={"chat_id":S["telegram_chat_id"],"text":"✅ ARTIFICIAL & INTELLIGENT — Telegram connected!"})
+                    if r.status_code == 200: st.success("✅ Telegram test message sent!")
+                    else: st.error(f"Failed: {r.text}")
+                except Exception as ex: st.error(str(ex))
+            else: st.warning("Add token and chat ID first.")
 
-        st.markdown("### 🌐 Online Deployment")
-        st.markdown("""<div class='card card-g'>
-<strong>Deploy to Streamlit Cloud (free):</strong><br>
-1. Push code to GitHub<br>
-2. Go to share.streamlit.io<br>
-3. Connect repo → deploy<br>
-4. Access from any device, anywhere<br><br>
-<strong>Run locally (offline):</strong><br>
-<code>streamlit run app.py</code><br>
-Works 100% offline with LM Studio running
+    with set_tabs[2]:
+        st.markdown("### 🌤️ Display Settings")
+        new_city = st.text_input("Your city (for weather):", value=S.get("weather_city","Sydney"), key="s_city")
+        new_pw   = st.text_input("Change dashboard password:", type="password", key="s_pw")
+        new_pw2  = st.text_input("Confirm new password:", type="password", key="s_pw2")
+        if st.button("💾 Save Display Settings", use_container_width=True, type="primary", key="save_disp"):
+            S["weather_city"] = new_city
+            if new_pw and new_pw == new_pw2:
+                S["password"] = new_pw
+                st.success("✅ Password updated")
+            elif new_pw and new_pw != new_pw2:
+                st.error("Passwords don't match")
+            jsave(SETTINGS_FILE, S); st.success("✅ Display settings saved")
+
+    with set_tabs[3]:
+        st.markdown("### 🔑 API Keys Reference")
+        st.markdown("""<div class='card' style='font-size:.82em;color:#e0e0e0;'>
+<b style='color:#ff006e;'>DeepSeek</b> — platform.deepseek.com → API Keys<br>
+<b style='color:#ff006e;'>OpenAI</b> — platform.openai.com → API Keys<br>
+<b style='color:#ff006e;'>HeyGen</b> — app.heygen.com → Settings → API<br>
+<b style='color:#ff006e;'>D-ID</b> — studio.d-id.com → Settings → API<br>
+<b style='color:#ff006e;'>LM Studio</b> — Run locally on port 1234 (no key needed)<br>
+<b style='color:#ff006e;'>Ollama</b> — Run locally on port 11434 (no key needed)
 </div>""", unsafe_allow_html=True)
 
-    if st.button("💾 Save All Settings", use_container_width=True, type="primary"):
-        new_settings = {
-            "openai_key": oai_key, "lm_studio_url": lm_url, "lm_model": lm_model,
-            "ollama_url": ol_url, "ollama_model": ol_model,
-            "telegram_token": tg_token, "telegram_chat_id": tg_chat_id,
-            "weather_city": w_city, "weather_key": w_key
-        }
-        jsave(SF, new_settings)
-        st.success("✅ Settings saved! Refresh to apply.")
-        send_telegram(f"⚙️ Settings updated on Avatar Empire\n{now.strftime('%d %b %Y %H:%M')}")
-
-    st.markdown("---")
-    st.markdown("### 📊 System Status")
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Internet", "🟢 Online" if online else "🔴 Offline")
-    c2.metric("Products", len(products))
-    c3.metric("Leads", len(leads))
-    c4.metric("Avatars", len(avatars))
-    st.markdown(f"<span style='color:#1a1a1a;font-size:.75em;'>Data stored locally in /data/ · All settings encrypted in JSON · v3.0 · {now.strftime('%Y')}</span>", unsafe_allow_html=True)
+    with set_tabs[4]:
+        st.markdown("### 📤 Data Export")
+        all_data = {"settings":S,"tasks":jload(TASKS_FILE,[]),"leads":jload(LEADS_FILE,[]),"revenue":jload(REVENUE_FILE,[]),"avatars":jload(AVF,[]),"ideas":jload(IDEAS_FILE,[]),"enquiries":jload(ENQUIRIES_FILE,[])}
+        import json as _json
+        st.download_button("⬇ Export All Data (JSON)", _json.dumps(all_data, indent=2, default=str), "ai_dashboard_backup.json", key="dl_all")
+        if st.button("🗑️ Clear All Tasks", key="clear_tasks"):
+            jsave(TASKS_FILE, []); st.success("Tasks cleared"); st.rerun()
+        if st.button("🗑️ Clear Chat History", key="clear_chat"):
+            st.session_state["chat_history"] = []; st.success("Chat cleared")

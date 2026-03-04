@@ -1,10 +1,11 @@
 {
-  "password_hash": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
-  "username": "Admin",
   "openai_key": "",
-  "heygen_key": "",
-  "elevenlabs_key": "",
-  "auto_mode": true,
-  "daily_approval": true,
-  "revenue_alerts": true
+  "lm_studio_url": "http://localhost:1234/v1",
+  "lm_model": "Llama-3.2-1B-Instruct-Q5_K_M",
+  "ollama_url": "http://localhost:11434/v1",
+  "ollama_model": "llama3.2:1b",
+  "telegram_token": "",
+  "telegram_chat_id": "",
+  "weather_city": "Perth",
+  "weather_key": ""
 }
