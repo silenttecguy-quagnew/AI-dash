@@ -1843,6 +1843,12 @@ with tabs[10]:
 with tabs[11]:
     st.markdown("## 💰 Revenue Dashboard")
     revenue_data = jload(REVENUE_FILE, [])
+    # Handle legacy dict format {today, history} or ensure it's a list
+    if isinstance(revenue_data, dict):
+        revenue_data = revenue_data.get("history", [])
+    if not isinstance(revenue_data, list):
+        revenue_data = []
+    revenue_data = [r for r in revenue_data if isinstance(r, dict)]
 
     mrr = sum(r.get("amount",0) for r in revenue_data if r.get("type")=="monthly")
     total_rev = sum(r.get("amount",0) for r in revenue_data)

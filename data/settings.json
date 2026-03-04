@@ -1,11 +1,14 @@
 {
   "openai_key": "",
+  "deepseek_key": "sk-6c9ee828c9b24ea391e349e7477b85b4",
   "lm_studio_url": "http://localhost:1234/v1",
   "lm_model": "Llama-3.2-1B-Instruct-Q5_K_M",
   "ollama_url": "http://localhost:11434/v1",
   "ollama_model": "llama3.2:1b",
   "telegram_token": "",
   "telegram_chat_id": "",
-  "weather_city": "Perth",
-  "weather_key": ""
+  "weather_city": "Sydney",
+  "weather_key": "",
+  "heygen_key": "",
+  "did_key": ""
 }
