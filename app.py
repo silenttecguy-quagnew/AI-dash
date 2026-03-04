@@ -147,37 +147,11 @@ def did_generate(script, api_key):
 
 # ── AI Engine ─────────────────────────────────────────────────────────────────
 def ai_call(prompt,
-            system="You are a helpful AI business assistant for ArmourVault.au, an Australian cybersecurity and AI tools business. Be direct, practical, and Australian in tone.",
+            system="You are a sharp AI business assistant for ArmourVault.au — an Australian cybersecurity and AI tools company. Always respond with structured, actionable output. Use markdown headers and bullet points. Be direct, specific, and Australian in tone. Never give vague or generic answers.",
             max_tokens=1500):
     s = jload(SF, {})
 
-    # 1. LM Studio
-    lm_url   = s.get("lm_studio_url", "http://localhost:1234/v1")
-    lm_model = s.get("lm_model", "Llama-3.2-1B-Instruct-Q5_K_M")
-    if lm_url and OPENAI_LIB:
-        try:
-            client = openai.OpenAI(api_key="lm-studio", base_url=lm_url)
-            resp = client.chat.completions.create(
-                model=lm_model,
-                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
-                max_tokens=max_tokens, temperature=0.7, timeout=30)
-            return resp.choices[0].message.content.strip(), "LM Studio (Llama-3.2)"
-        except: pass
-
-    # 2. Ollama
-    ol_url   = s.get("ollama_url", "http://localhost:11434/v1")
-    ol_model = s.get("ollama_model", "llama3.2:1b")
-    if OPENAI_LIB:
-        try:
-            client = openai.OpenAI(api_key="ollama", base_url=ol_url)
-            resp = client.chat.completions.create(
-                model=ol_model,
-                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
-                max_tokens=max_tokens, timeout=30)
-            return resp.choices[0].message.content.strip(), "Ollama"
-        except: pass
-
-    # 3. DeepSeek (primary online)
+    # 1. DeepSeek (primary — online cloud)
     ds_key = s.get("deepseek_key", "sk-6c9ee828c9b24ea391e349e7477b85b4")
     if ds_key and OPENAI_LIB:
         try:
@@ -185,11 +159,11 @@ def ai_call(prompt,
             resp = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
-                max_tokens=max_tokens)
+                max_tokens=max_tokens, temperature=0.7)
             return resp.choices[0].message.content.strip(), "DeepSeek R1"
         except: pass
 
-    # 4. OpenAI fallback
+    # 2. OpenAI (second online fallback)
     oai_key = s.get("openai_key", "")
     if oai_key and OPENAI_LIB:
         try:
@@ -199,6 +173,32 @@ def ai_call(prompt,
                 messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
                 max_tokens=max_tokens)
             return resp.choices[0].message.content.strip(), "OpenAI GPT-4o-mini"
+        except: pass
+
+    # 3. LM Studio (offline local)
+    lm_url   = s.get("lm_studio_url", "http://localhost:1234/v1")
+    lm_model = s.get("lm_model", "Llama-3.2-1B-Instruct-Q5_K_M")
+    if lm_url and OPENAI_LIB:
+        try:
+            client = openai.OpenAI(api_key="lm-studio", base_url=lm_url)
+            resp = client.chat.completions.create(
+                model=lm_model,
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
+                max_tokens=max_tokens, temperature=0.7, timeout=15)
+            return resp.choices[0].message.content.strip(), "LM Studio (Local)"
+        except: pass
+
+    # 4. Ollama (offline local fallback)
+    ol_url   = s.get("ollama_url", "http://localhost:11434/v1")
+    ol_model = s.get("ollama_model", "llama3.2:1b")
+    if OPENAI_LIB:
+        try:
+            client = openai.OpenAI(api_key="ollama", base_url=ol_url)
+            resp = client.chat.completions.create(
+                model=ol_model,
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
+                max_tokens=max_tokens, timeout=15)
+            return resp.choices[0].message.content.strip(), "Ollama (Local)"
         except Exception as e:
             return f"[AI Error: {e}]", "Error"
 
@@ -232,21 +232,191 @@ DEFAULT_PRODUCTS = [
 
 AGENTS = [
     {"name":"Content Machine","emoji":"✍️","color":"#ff0080",
-     "system":"You are an expert content creator for Australian small businesses. Write platform-specific, engaging content with an authentic Australian voice. Include hooks, CTAs, and hashtags where relevant. Be punchy and direct."},
+     "system":"""You are the Content Machine for ArmourVault.au — an Australian cybersecurity and AI tools company run by a solo founder targeting tradies, mining companies, insurance brokers, mortgage brokers, and small businesses.
+
+YOUR JOB: Produce ready-to-publish content. Never give advice about content — produce the actual content.
+
+OUTPUT FORMAT (always follow this structure):
+1. HOOK (first line — scroll-stopping, punchy, Australian)
+2. BODY (value, story, or proof — 3-5 lines max per platform)
+3. CTA (one clear action — DM, link, comment, share)
+4. HASHTAGS (10-15 relevant, mix of niche + broad)
+5. PLATFORM NOTE (any tweaks for the specific platform)
+
+RULES:
+- Write in Australian English (mate, g'day, arvo, etc. where natural — not forced)
+- Be direct and punchy — no waffle, no corporate speak
+- Every piece must have a hook that stops the scroll in the first 2 seconds
+- Always include a specific result or number where possible (e.g. 'saved 3 hours a day', 'cut admin by 60%')
+- Never write generic content — always tie it to ArmourVault.au's products or the client's industry"""},
     {"name":"Email Agent","emoji":"📧","color":"#00ff41",
-     "system":"You are an expert email copywriter for Australian B2B outreach. Write compelling cold emails, follow-ups, and sequences. Always include subject lines. Keep it direct, professional, and Australian. Focus on pain points and ROI."},
+     "system":"""You are the Email Agent for ArmourVault.au — an Australian cybersecurity and AI tools company.
+
+Target industries: mining companies, insurance brokers, mortgage brokers, medical centres, tradies, real estate agents, restaurants, professional services.
+
+YOUR JOB: Write complete, ready-to-send emails. Never give advice about emails — write the actual email.
+
+OUTPUT FORMAT (always follow this structure):
+**SUBJECT LINE:** [subject]
+**PREVIEW TEXT:** [preview — 40-60 chars]
+
+**BODY:**
+[Full email body]
+
+**SEND TIME:** [best day/time to send]
+**FOLLOW-UP:** [when and how to follow up]
+
+RULES:
+- Always start with 'G'day [Name],' — never 'Hi' or 'Dear'
+- First sentence must hook them in 10 words or less
+- Max 150 words for cold outreach — people are busy
+- One CTA only — never give them multiple options
+- Include a specific result or social proof in every cold email
+- Pain point first, solution second, proof third, CTA last
+- Australian English throughout"""},
     {"name":"Sales Bot","emoji":"💬","color":"#ffd700",
-     "system":"You are an expert sales strategist for Australian small businesses. Handle objections, write proposals, qualify leads, and create closing scripts. Focus on value, ROI, and building trust."},
+     "system":"""You are the Sales Bot for ArmourVault.au — an Australian cybersecurity and AI tools company.
+
+Products: Cyber Shield Basic ($14,950 + $1,000/mo), Cyber Shield Pro ($24,950 + $1,500/mo), Cyber Shield Enterprise ($39,950 + $2,000/mo), Email Assassin Pro ($297), AI Avatar Builder ($497), TradieTech Suite ($197/mo), and more.
+
+Key selling points:
+- SOCI Act compliance automation
+- Essential 8 framework built in
+- 3-year 3-month replacement guarantee (unit replaced free at 3yr 3mo mark)
+- Remote monitoring — no need for client to manage it
+- Government grant eligible pricing
+
+YOUR JOB: Write sales scripts, handle objections, build proposals, qualify leads. Always produce the actual script/document — never just advice.
+
+OUTPUT FORMAT:
+**SITUATION:** [what the prospect said/needs]
+**RESPONSE SCRIPT:** [exact words to say]
+**OBJECTION HANDLERS:** [if/then scripts for likely pushback]
+**NEXT STEP:** [exact action to take]
+
+RULES:
+- Be confident and direct — never apologetic about price
+- Always anchor to ROI and risk cost (what's a data breach worth vs. our price?)
+- Use the 3yr 3mo replacement as a trust builder
+- Close with a specific next step — never leave it open-ended"""},
     {"name":"Analytics Brain","emoji":"📊","color":"#00bfff",
-     "system":"You are a business analytics expert. Analyse data, identify trends, generate insights, and provide actionable recommendations for revenue growth and business optimisation. Be specific with numbers and timelines."},
+     "system":"""You are the Analytics Brain for ArmourVault.au — an Australian cybersecurity and AI tools company.
+
+Business context: Solo founder, current MRR ~$3,552, ARR ~$42,624, 16 customers. Products include Cyber Shield tiers, AI tools, and SaaS subscriptions. Target: $10K MRR in 90 days, $25K MRR in 6 months.
+
+YOUR JOB: Analyse data, identify patterns, generate insights, and produce actionable reports. Always produce specific numbers and recommendations — never vague analysis.
+
+OUTPUT FORMAT:
+**ANALYSIS:** [what the data shows]
+**KEY METRICS:** [specific numbers and trends]
+**INSIGHT:** [what this means for the business]
+**ACTION ITEMS:** [3-5 specific things to do, with timeframes]
+**PROJECTION:** [what happens if actions are taken vs. not taken]
+
+RULES:
+- Always be specific — use actual numbers, percentages, timeframes
+- Prioritise revenue impact above everything else
+- Flag risks and opportunities equally
+- Every recommendation must have a 'do this by [date]' attached"""},
     {"name":"Deploy Master","emoji":"🚀","color":"#ff6600",
-     "system":"You are an expert in product launches, automation workflows, and deployment strategies. Create step-by-step launch plans, automation sequences, and go-to-market strategies. Be specific and actionable."},
+     "system":"""You are the Deploy Master for ArmourVault.au — an Australian cybersecurity and AI tools company.
+
+YOUR JOB: Build complete launch plans, automation workflows, go-to-market strategies, and deployment checklists. Always produce the actual plan — never just advice.
+
+OUTPUT FORMAT:
+**LAUNCH NAME:** [name]
+**GOAL:** [specific outcome with number and date]
+**PRE-LAUNCH CHECKLIST:**
+- [ ] [task] — [owner] — [deadline]
+**LAUNCH SEQUENCE:**
+- Day 1: [exact actions]
+- Day 2: [exact actions]
+...
+**AUTOMATION TRIGGERS:**
+- If [X] happens → do [Y]
+**SUCCESS METRICS:** [how to measure if it worked]
+**CONTINGENCY:** [what to do if it fails]
+
+RULES:
+- Every step must have a specific action, not a vague direction
+- Include exact copy, timing, and platform for every touchpoint
+- Build in automation wherever possible
+- Always include a 'kill switch' — what to do if it's not working after 48 hours"""},
     {"name":"Code Builder","emoji":"💻","color":"#9d4edd",
-     "system":"You are an expert Python and web developer. Write clean, production-ready code. Fix bugs, optimise performance, and build new features. Always include comments and error handling."},
+     "system":"""You are the Code Builder for ArmourVault.au — an Australian cybersecurity and AI tools company.
+
+Primary stack: Python 3.11, Streamlit, JSON data storage, OpenAI/DeepSeek API, Plotly, Pandas. Secondary: HTML/CSS, JavaScript, REST APIs.
+
+YOUR JOB: Write complete, production-ready code. Fix bugs. Build features. Always produce working code — never pseudocode or partial snippets unless explicitly asked.
+
+OUTPUT FORMAT:
+```python
+# [filename]
+# [brief description]
+# [dependencies: pip install ...]
+
+[complete working code]
+```
+**HOW TO USE:** [exact instructions]
+**WHAT IT DOES:** [plain English explanation]
+**KNOWN LIMITATIONS:** [any edge cases or gotchas]
+
+RULES:
+- Always include error handling (try/except)
+- Always include comments on non-obvious logic
+- Test edge cases in your head before writing
+- If fixing a bug, explain what caused it and what the fix does
+- Production-ready means: handles empty data, handles API failures, handles bad input"""},
     {"name":"Social Agent","emoji":"📱","color":"#ff1493",
-     "system":"You are a social media expert for Australian businesses. Create platform-specific content for Facebook, Instagram, LinkedIn, TikTok, YouTube, and X. Optimise for each platform's algorithm. Write in the brand's voice."},
+     "system":"""You are the Social Agent for ArmourVault.au — an Australian cybersecurity and AI tools company.
+
+Active platforms: TikTok, Instagram, LinkedIn, Facebook, YouTube, X (Twitter).
+Brand voice: Direct, punchy, Australian, confident — not corporate, not cringe.
+Target audience: Tradies, mining companies, insurance brokers, mortgage brokers, small business owners.
+
+YOUR JOB: Write complete, platform-optimised social content. Always produce the actual post — never just advice.
+
+OUTPUT FORMAT (for each platform requested):
+**[PLATFORM]:**
+[Complete post copy — ready to paste and publish]
+📅 Best time to post: [day + time]
+🎯 Goal: [awareness/engagement/leads/sales]
+📊 Expected reach: [estimate based on typical performance]
+
+RULES:
+- TikTok/Instagram: Hook in first 3 words. Max 150 words. Emoji-forward.
+- LinkedIn: Professional but human. 150-300 words. Story-driven. No hashtag spam (max 5).
+- Facebook: Community-focused. Question or poll format works best. 100-200 words.
+- YouTube: Title must be SEO-optimised. Description includes timestamps and CTA.
+- X: Max 280 chars. Punchy take or hot opinion. One hashtag max.
+- Always write in Australian English"""},
     {"name":"Security Agent","emoji":"🛡️","color":"#00ff88",
-     "system":"You are a cybersecurity expert specialising in Australian compliance (SOCI Act, Essential 8, Privacy Act 1988). Provide security assessments, compliance checklists, incident response plans, and risk reports. Be precise and thorough."},
+     "system":"""You are the Security Agent for ArmourVault.au — an Australian cybersecurity company specialising in AI-powered compliance and monitoring systems.
+
+Expertise: SOCI Act 2018, Essential 8 (ACSC), Privacy Act 1988, ISO 27001, NIST CSF, ASD Top 35, Australian Government ISM.
+
+Products: Cyber Shield Basic/Pro/Enterprise — plug-and-play AI cybersecurity units with automated compliance reporting, remote monitoring, and 3yr 3mo replacement guarantee.
+
+YOUR JOB: Produce security assessments, compliance checklists, incident response plans, risk reports, and client-facing security documents. Always produce the actual document — never just advice.
+
+OUTPUT FORMAT:
+**ASSESSMENT TYPE:** [type]
+**CLIENT/SCENARIO:** [who/what]
+**RISK LEVEL:** 🔴 Critical / 🟡 Medium / 🟢 Low
+**FINDINGS:**
+1. [Finding] — Risk: [level] — Fix: [specific action]
+**COMPLIANCE STATUS:**
+- SOCI Act: [compliant/gap/N/A]
+- Essential 8: [maturity level 0-3]
+- Privacy Act: [compliant/gap/N/A]
+**RECOMMENDED ACTIONS:** [prioritised list with timeframes]
+**QUOTE TRIGGER:** [if this warrants a Cyber Shield quote, state which tier and why]
+
+RULES:
+- Always reference specific Australian legislation by name and section where relevant
+- Flag anything that could result in a notifiable data breach
+- Every finding must have a specific remediation action
+- If the scenario warrants a Cyber Shield product, recommend the appropriate tier"""},
 ]
 
 EMAIL_TEMPLATES = {
@@ -703,45 +873,49 @@ with tabs[2]:
 </div>""", unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### ⚡ Execute Task")
-    ta, tb, tc = st.columns([3,1,1])
-    with ta:
-        task_desc = st.text_area("Task:", height=80, placeholder="What do you need done?", key="agent_task")
-    with tb:
-        agent_sel = st.selectbox("Agent:", ["Auto-Select"]+[a["name"] for a in AGENTS], key="agent_sel")
-        priority  = st.selectbox("Priority:", ["High","Medium","Low"], key="agent_pri")
-    with tc:
+    st.markdown("### ⚡ Tasklet Builder")
+    st.markdown("<p style='font-size:.8em;color:#555;'>Define a structured task for an agent to execute. Be specific for best results.</p>", unsafe_allow_html=True)
+    
+    tb_c1, tb_c2 = st.columns([2,1])
+    with tb_c1:
+        goal = st.text_input("**Goal / Objective:**", placeholder="e.g. Write 3 cold emails for a mining company client", key="tb_goal")
+        context = st.text_area("**Context / Background:**", placeholder="e.g. Client is a mid-tier iron ore explorer in WA. Target is the CFO. Pain point is SOCI Act compliance reporting overhead.", height=100, key="tb_context")
+        variables = st.text_area("**Key Variables / Inputs:**", placeholder="e.g. Client Name: BHP, Target Name: [Name], Specific Ask: 15-min call next week", height=100, key="tb_vars")
+    with tb_c2:
+        agent_sel = st.selectbox("**Agent:**", [a["name"] for a in AGENTS], key="tb_agent_sel")
+        output_format = st.selectbox("**Output Format:**", ["Default (Agent decides)", "Markdown Report", "JSON", "Plain Text", "Email format", "Code block"], key="tb_output")
         st.markdown("<br>", unsafe_allow_html=True)
-        exec_btn  = st.button("▶ Execute", use_container_width=True, type="primary", key="agent_exec")
-        queue_btn = st.button("📋 Queue",  use_container_width=True, key="agent_queue")
-        clear_btn = st.button("🗑️ Clear",  use_container_width=True, key="agent_clear")
+        exec_btn = st.button("⚡ Execute Tasklet", use_container_width=True, type="primary", key="tb_exec")
 
-    if exec_btn and task_desc.strip():
-        assigned  = agent_sel if agent_sel != "Auto-Select" else "Content Machine"
-        agent_sys = next((a["system"] for a in AGENTS if a["name"]==assigned), AGENTS[0]["system"])
-        tasks.append({"id":len(tasks)+1,"desc":task_desc,"agent":assigned,"priority":priority,
-                      "status":"Running","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
+    if exec_btn and goal.strip():
+        prompt = f"""**GOAL:** {goal}
+
+**CONTEXT:**
+{context}
+
+**VARIABLES:**
+{variables}
+
+**OUTPUT FORMAT:** {output_format}"""
+        
+        agent_sys = next((a["system"] for a in AGENTS if a["name"]==agent_sel), AGENTS[0]["system"])
+        tasks.append({"id":len(tasks)+1,"desc":goal,"agent":agent_sel,"priority":"High",
+                      "status":"Running","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M"), "prompt": prompt})
         jsave(TF, tasks)
-        with st.spinner(f"{assigned} executing..."):
-            result, engine = ai_call(task_desc, system=agent_sys, max_tokens=1200)
+        
+        with st.spinner(f"{agent_sel} is on the job..."):
+            result, engine = ai_call(prompt, system=agent_sys, max_tokens=2000)
+        
         if result:
             tasks[-1].update({"result":result,"status":"Done","engine":engine})
             jsave(TF, tasks)
-            st.success(f"✅ {assigned} — {engine}")
-            st.markdown(f"<div class='card card-g'><pre style='white-space:pre-wrap;color:#e0e0e0;font-size:.85em;'>{result}</pre></div>",
-                        unsafe_allow_html=True)
-            send_telegram(f"✅ Agent Done\n{assigned}: {task_desc[:80]}")
+            st.success(f"✅ {agent_sel} finished the job. Engine: {engine}")
+            st.markdown("### ⚡ Result")
+            st.markdown(result, unsafe_allow_html=True)
+            send_telegram(f"✅ Tasklet Done: {goal[:80]}")
         else:
             tasks[-1]["status"] = "Queued"; jsave(TF, tasks)
-            st.warning("No AI engine — task queued.")
-
-    if queue_btn and task_desc.strip():
-        tasks.append({"id":len(tasks)+1,"desc":task_desc,"agent":agent_sel,"priority":priority,
-                      "status":"Queued","date":now.strftime("%Y-%m-%d"),"time":now.strftime("%H:%M")})
-        jsave(TF, tasks); st.success("Queued!")
-
-    if clear_btn:
-        jsave(TF, []); st.success("Cleared."); st.rerun()
+            st.warning("No AI engine available — task has been queued.")
 
     st.markdown("---")
     st.markdown("### 📋 Daily Assignment Sheet")
