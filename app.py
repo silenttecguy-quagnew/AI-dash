@@ -112,7 +112,19 @@ def ai_call(prompt, system="You are a helpful AI business assistant.", max_token
             return resp.choices[0].message.content.strip(), "Ollama (Llama)"
         except: pass
 
-    # 3. OpenAI
+    # 3. DeepSeek (primary online engine — OpenAI-compatible)
+    ds_key = s.get("deepseek_key", "sk-6c9ee828c9b24ea391e349e7477b85b4")
+    if ds_key and OPENAI_LIB:
+        try:
+            client = openai.OpenAI(api_key=ds_key, base_url="https://api.deepseek.com/v1")
+            resp = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                max_tokens=max_tokens)
+            return resp.choices[0].message.content.strip(), "DeepSeek R1"
+        except: pass
+
+    # 4. OpenAI (fallback)
     oai_key = s.get("openai_key", "")
     if oai_key and OPENAI_LIB:
         try:
