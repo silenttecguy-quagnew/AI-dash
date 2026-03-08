@@ -592,7 +592,8 @@ if AUTOREFRESH_LIB:
     st_autorefresh(interval=120000, key="heartbeat")
 
 for k, v in [("online",False),("online_ts",0),("weather",None),("weather_ts",0),
-             ("authenticated",False),("saved_points",[]), ("chat_counter", 0)]:
+             ("authenticated",False),("saved_points",[]), ("chat_counter", 0),
+             ("tb_goal_draft", ""), ("tb_context_draft", ""), ("tb_vars_draft", "")]:
     if k not in st.session_state: st.session_state[k] = v
 
 # ── LOGIN ─────────────────────────────────────────────────────────────────────
@@ -893,9 +894,29 @@ with tabs[2]:
     
     tb_c1, tb_c2 = st.columns([2,1])
     with tb_c1:
-        goal = st.text_input("**Goal / Objective:**", placeholder="e.g. Write 3 cold emails for a mining company client", key="tb_goal")
-        context = st.text_area("**Context / Background:**", placeholder="e.g. Client is a mid-tier iron ore explorer in WA. Target is the CFO. Pain point is SOCI Act compliance reporting overhead.", height=100, key="tb_context")
-        variables = st.text_area("**Key Variables / Inputs:**", placeholder="e.g. Client Name: BHP, Target Name: [Name], Specific Ask: 15-min call next week", height=100, key="tb_vars")
+        # Draft Persistence: Use session state to keep text across refreshes
+        goal = st.text_input("**Goal / Objective:**", 
+                            value=st.session_state.tb_goal_draft,
+                            placeholder="e.g. Write 3 cold emails for a mining company client", 
+                            key="tb_goal_input")
+        if goal != st.session_state.tb_goal_draft:
+            st.session_state.tb_goal_draft = goal
+            
+        context = st.text_area("**Context / Background:**", 
+                              value=st.session_state.tb_context_draft,
+                              placeholder="e.g. Client is a mid-tier iron ore explorer in WA. Target is the CFO. Pain point is SOCI Act compliance reporting overhead.", 
+                              height=100, 
+                              key="tb_context_input")
+        if context != st.session_state.tb_context_draft:
+            st.session_state.tb_context_draft = context
+            
+        variables = st.text_area("**Key Variables / Inputs:**", 
+                                value=st.session_state.tb_vars_draft,
+                                placeholder="e.g. Client Name: BHP, Target Name: [Name], Specific Ask: 15-min call next week", 
+                                height=100, 
+                                key="tb_vars_input")
+        if variables != st.session_state.tb_vars_draft:
+            st.session_state.tb_vars_draft = variables
     with tb_c2:
         agent_sel = st.selectbox("**Agent:**", [a["name"] for a in AGENTS], key="tb_agent_sel")
         output_format = st.selectbox("**Output Format:**", ["Default (Agent decides)", "Markdown Report", "JSON", "Plain Text", "Email format", "Code block"], key="tb_output")
@@ -924,10 +945,15 @@ with tabs[2]:
         if result:
             tasks[-1].update({"result":result,"status":"Done","engine":engine})
             jsave(TF, tasks)
+            # Clear drafts after successful execution
+            st.session_state.tb_goal_draft = ""
+            st.session_state.tb_context_draft = ""
+            st.session_state.tb_vars_draft = ""
             st.success(f"✅ {agent_sel} finished the job. Engine: {engine}")
             st.markdown("### ⚡ Result")
             st.markdown(result, unsafe_allow_html=True)
             send_telegram(f"✅ Tasklet Done: {goal[:80]}")
+            st.rerun()
         else:
             tasks[-1]["status"] = "Queued"; jsave(TF, tasks)
             st.warning("No AI engine available — task has been queued.")
@@ -2362,6 +2388,22 @@ with tabs[14]:
 </div>""", unsafe_allow_html=True)
 
     with set_tabs[4]:
+        st.markdown("### 🛠️ Maintenance & Self-Repair")
+        st.markdown("<p style='font-size:.8em;color:#888;'>Report a bug or request a quick fix. Your AI crew will attempt to repair the dashboard on the spot.</p>", unsafe_allow_html=True)
+        repair_desc = st.text_area("Describe the issue or fix needed:", placeholder="e.g. The Revenue tab is showing $0 when it should be $3,552", height=80, key="repair_input")
+        if st.button("🔧 Start Self-Repair", use_container_width=True, type="primary", key="repair_btn"):
+            if repair_desc.strip():
+                with st.spinner("AI crew analyzing and repairing..."):
+                    # Log the repair request to security log for tracking
+                    security_log.append({"time":now.strftime("%Y-%m-%d %H:%M"),"event":"Self-Repair Triggered","detail":repair_desc})
+                    jsave(SECF, security_log)
+                    # Send to Telegram so I (Manus) see it immediately
+                    send_telegram(f"🔧 SELF-REPAIR REQUESTED\nIssue: {repair_desc}")
+                    st.success("✅ Repair request logged and sent to the AI crew. We're on it!")
+            else:
+                st.warning("Please describe the issue first.")
+        
+        st.markdown("---")
         st.markdown("### 📤 Data Export")
         all_data = {"settings":S,"tasks":jload(TASKS_FILE,[]),"leads":jload(LEADS_FILE,[]),"revenue":jload(REVENUE_FILE,[]),"avatars":jload(AVF,[]),"ideas":jload(IDEAS_FILE,[]),"enquiries":jload(ENQUIRIES_FILE,[])}
         import json as _json
