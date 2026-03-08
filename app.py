@@ -32,9 +32,7 @@ try:
     from streamlit_autorefresh import st_autorefresh
     AUTOREFRESH_LIB = True
 except ImportError:
-    AUTOREFRESH_LIB = False
-
-# ── Paths ─────────────────────────────────────────────────────────────────────
+    AUTOREFRESH_LIB = False# ── Paths ─────────────────────────────────────────────────────────────────────
 DATA    = Path("data"); DATA.mkdir(exist_ok=True)
 AVDIR   = DATA/"avatars_folder"; AVDIR.mkdir(exist_ok=True)
 SF      = DATA/"settings.json"
@@ -50,15 +48,13 @@ CLIF    = DATA/"clients.json"
 IDEAF   = DATA/"ideas.json"
 DREAMF  = DATA/"dreambuilds.json"
 SECF    = DATA/"security.json"
-# ── Path aliases (for appended tab code compatibility) ────────────────────────
-DATA_DIR      = DATA
-TASKS_FILE    = TF
-LEADS_FILE    = LF
-REVENUE_FILE  = RF
-PRODUCTS_FILE = PF
-SETTINGS_FILE = SF
-IDEAS_FILE    = IDEAF
-ENQUIRIES_FILE= DREAMF
+DRAFTF  = DATA/"drafts.json"
+ENQUIRIES_FILE = DATA/"enquiries.json"
+LEADS_FILE = DATA/"leads.json"
+IDEAS_FILE = DATA/"ideas.json"
+REVENUE_FILE = DATA/"revenue.json"
+TASKS_FILE = DATA/"tasks.json"
+SETTINGS_FILE = DATA/"settings.json"
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def jload(p, d):
     try: return json.loads(p.read_text()) if p.exists() else d
@@ -635,6 +631,15 @@ clients     = jload(CLIF, [])
 ideas       = jload(IDEAF, [])
 dreambuilds = jload(DREAMF, [])
 security_log= jload(SECF, [])
+drafts      = jload(DRAFTF, {"tb_goal": "", "tb_context": "", "tb_vars": ""})
+
+# Restore drafts to session state if not already set
+if "tb_goal_draft" not in st.session_state or not st.session_state.tb_goal_draft:
+    st.session_state.tb_goal_draft = drafts.get("tb_goal", "")
+if "tb_context_draft" not in st.session_state or not st.session_state.tb_context_draft:
+    st.session_state.tb_context_draft = drafts.get("tb_context", "")
+if "tb_vars_draft" not in st.session_state or not st.session_state.tb_vars_draft:
+    st.session_state.tb_vars_draft = drafts.get("tb_vars", "")
 
 # ── Online / weather cache ────────────────────────────────────────────────────
 if time.time() - st.session_state.online_ts > 60:
@@ -901,6 +906,7 @@ with tabs[2]:
                             key="tb_goal_input")
         if goal != st.session_state.tb_goal_draft:
             st.session_state.tb_goal_draft = goal
+            jsave(DRAFTF, {"tb_goal": goal, "tb_context": st.session_state.tb_context_draft, "tb_vars": st.session_state.tb_vars_draft})
             
         context = st.text_area("**Context / Background:**", 
                               value=st.session_state.tb_context_draft,
@@ -909,6 +915,7 @@ with tabs[2]:
                               key="tb_context_input")
         if context != st.session_state.tb_context_draft:
             st.session_state.tb_context_draft = context
+            jsave(DRAFTF, {"tb_goal": st.session_state.tb_goal_draft, "tb_context": context, "tb_vars": st.session_state.tb_vars_draft})
             
         variables = st.text_area("**Key Variables / Inputs:**", 
                                 value=st.session_state.tb_vars_draft,
@@ -917,6 +924,7 @@ with tabs[2]:
                                 key="tb_vars_input")
         if variables != st.session_state.tb_vars_draft:
             st.session_state.tb_vars_draft = variables
+            jsave(DRAFTF, {"tb_goal": st.session_state.tb_goal_draft, "tb_context": st.session_state.tb_context_draft, "tb_vars": variables})
     with tb_c2:
         agent_sel = st.selectbox("**Agent:**", [a["name"] for a in AGENTS], key="tb_agent_sel")
         output_format = st.selectbox("**Output Format:**", ["Default (Agent decides)", "Markdown Report", "JSON", "Plain Text", "Email format", "Code block"], key="tb_output")
@@ -949,6 +957,7 @@ with tabs[2]:
             st.session_state.tb_goal_draft = ""
             st.session_state.tb_context_draft = ""
             st.session_state.tb_vars_draft = ""
+            jsave(DRAFTF, {"tb_goal": "", "tb_context": "", "tb_vars": ""})
             st.success(f"✅ {agent_sel} finished the job. Engine: {engine}")
             st.markdown("### ⚡ Result")
             st.markdown(result, unsafe_allow_html=True)
