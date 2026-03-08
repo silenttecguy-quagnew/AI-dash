@@ -28,6 +28,12 @@ try:
 except ImportError:
     CHART_LIB = False
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    AUTOREFRESH_LIB = True
+except ImportError:
+    AUTOREFRESH_LIB = False
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA    = Path("data"); DATA.mkdir(exist_ok=True)
 AVDIR   = DATA/"avatars_folder"; AVDIR.mkdir(exist_ok=True)
@@ -581,8 +587,12 @@ hr{border-color:rgba(255,255,255,.04)!important;}
 </style>""", unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
+if AUTOREFRESH_LIB:
+    # Heartbeat every 2 mins to keep Streamlit Cloud session alive
+    st_autorefresh(interval=120000, key="heartbeat")
+
 for k, v in [("online",False),("online_ts",0),("weather",None),("weather_ts",0),
-             ("authenticated",False),("saved_points",[])]:
+             ("authenticated",False),("saved_points",[]), ("chat_counter", 0)]:
     if k not in st.session_state: st.session_state[k] = v
 
 # ── LOGIN ─────────────────────────────────────────────────────────────────────
@@ -828,9 +838,11 @@ with tabs[1]:
     prefill = st.session_state.pop("chat_prefill", "")
     ca, cb = st.columns([4,1])
     with ca:
+        # Use a dynamic key to force-clear the text area after sending
+        input_key = f"chat_input_{st.session_state.chat_counter}"
         user_msg = st.text_area("Message:", value=prefill, height=90,
                                 placeholder="Talk to your crew... 'write me a proposal', 'what's my MRR?', 'build an avatar for a tradie in Brisbane'",
-                                key="chat_input")
+                                key=input_key)
     with cb:
         chat_agent = st.selectbox("Agent:", ["Auto"]+[a["name"] for a in AGENTS], key="chat_agent")
         notify_tg  = st.checkbox("📱 Notify", key="chat_notify")
@@ -853,6 +865,9 @@ Respond clearly and practically. Use markdown. Be direct and Australian in tone.
                     if notify_tg: send_telegram(f"💬 Chat\n{result[:300]}")
                 else:
                     chat.append({"role":"system","content":"No AI engine — start LM Studio or check Settings."})
+                
+                # Increment counter to clear the text area on next run
+                st.session_state.chat_counter += 1
                 jsave(CF, chat); st.rerun()
     with cs2:
         if st.button("📋 Export Chat", use_container_width=True, key="chat_export"):
