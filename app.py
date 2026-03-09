@@ -1445,7 +1445,7 @@ with tabs[5]:
 
     with sec_tabs[4]:
         st.markdown("### 📁 Client Tracker")
-        cl_data = jload(DATA_DIR/"clients.json", [])
+        cl_data = jload(CLIF, [])
         with st.form("add_client_form"):
             cfc1, cfc2, cfc3 = st.columns(3)
             with cfc1:
@@ -1459,7 +1459,7 @@ with tabs[5]:
                 cl_next   = st.text_input("Next action:", key="cl_next")
             if st.form_submit_button("➕ Add Client", use_container_width=True):
                 cl_data.append({"name":cl_name,"type":cl_type,"tier":cl_tier,"monthly":cl_monthly,"status":cl_status,"next":cl_next,"date":now.strftime("%Y-%m-%d")})
-                jsave(DATA_DIR/"clients.json", cl_data); st.rerun()
+                jsave(CLIF, cl_data); st.rerun()
         if cl_data:
             total_mrr = sum(c.get("monthly",0) for c in cl_data if c.get("status")=="Active")
             st.markdown(f"<span class='pill-ai'>Active MRR from Security Clients: ${total_mrr:,}/mo</span>", unsafe_allow_html=True)
@@ -2202,7 +2202,7 @@ with tabs[12]:
 
     with bt_tabs[6]:
         st.markdown("### 📊 Weekly Wins Tracker")
-        wins = jload(DATA_DIR/"wins.json", [])
+        wins = jload(WINSF, [])
         with st.form("add_win_form"):
             wc1, wc2 = st.columns(2)
             with wc1:
@@ -2212,7 +2212,7 @@ with tabs[12]:
                 w_cat  = st.selectbox("Category:", ["Revenue","Client","Product","Marketing","Personal","Team"], key="w_cat")
             if st.form_submit_button("🏆 Log Win", use_container_width=True):
                 wins.append({"win":w_win,"value":w_value,"category":w_cat,"date":now.strftime("%Y-%m-%d")})
-                jsave(DATA_DIR/"wins.json", wins); st.rerun()
+                jsave(WINSF, wins); st.rerun()
         if wins:
             for w in reversed(wins[-10:]):
                 st.markdown(f"<div class='card' style='padding:8px 12px;margin:4px 0;'><span style='color:#39ff14;'>🏆</span> <b>{w.get('win','')}</b> <span style='color:#888;font-size:.8em;'>— {w.get('value','')} · {w.get('date','')}</span></div>",
