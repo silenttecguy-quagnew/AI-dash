@@ -45,7 +45,7 @@ streamlit run app.py
 
 ## 🔐 Password
 
-Default access code: `258088`
+Default access code:
 
 ---
 *Built for ArmourVault.au — Cybersecurity + AI for Australian businesses*
